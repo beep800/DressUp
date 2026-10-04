@@ -1,18 +1,19 @@
 import { assess, type Assessment } from './concern';
 import {
   HEALTH_COUNT_KEYS,
+  type AreaRow,
   type DashboardData,
   type HealthCounts,
-  type LocationEntry,
   type MidwifeHealthRow,
   type MidwifeMonthRow,
   type RegionGeo,
   type SocioeconomicAttribute,
 } from './types';
 
-// The workflow returns counts per midwife. Regions are built by summing those counts
-// for the midwives listed under each region in locations.json; rates are only
-// computed after summing.
+// The workflow returns counts per area and midwife, where an area is the town (or
+// county or state) worked out from the women's addresses. Each area is a region on the
+// dashboard; its counts are summed across midwives, and rates are only computed after
+// summing.
 
 export const emptyHealth = (): HealthCounts =>
   Object.fromEntries(HEALTH_COUNT_KEYS.map((k) => [k, 0])) as HealthCounts;
@@ -83,22 +84,30 @@ export interface NationalTotals {
   midwifeCount: number;
 }
 
-const normalizeCode = (code: string) => code.trim().toLowerCase();
+/** Region for women whose address is missing or could not be placed on the map. */
+export const UNKNOWN_AREA = 'Location unknown';
 
-/** Finds the region for a midwife code. Midwives missing from locations.json form their own area. */
-export function makeRegionLookup(locations: LocationEntry[]) {
-  const byCode = new Map<string, LocationEntry>();
-  for (const loc of locations) for (const code of loc.midwives) byCode.set(normalizeCode(String(code)), loc);
+/** Finds the region name and map position for an area_id. */
+export function makeAreaLookup(areas: AreaRow[]) {
+  const byId = new Map(areas.map((a) => [Number(a.area_id), a]));
+  // Two places with the same name are told apart by their state.
+  const nameCount = new Map<string, number>();
+  for (const a of areas) nameCount.set(a.name.toLowerCase(), (nameCount.get(a.name.toLowerCase()) ?? 0) + 1);
 
-  return (code: string): { region: string; geo: RegionGeo | null } => {
-    const loc = byCode.get(normalizeCode(code));
-    if (loc) {
-      return {
-        region: loc.region,
-        geo: { region: loc.region, country_name: loc.country, latitude: loc.latitude, longitude: loc.longitude },
-      };
-    }
-    return { region: code === 'Unassigned' ? 'No midwife code' : `Midwife ${code}`, geo: null };
+  return (areaId: number | null): { region: string; geo: RegionGeo | null } => {
+    const area = areaId === null ? undefined : byId.get(Number(areaId));
+    if (!area) return { region: UNKNOWN_AREA, geo: null };
+    const region =
+      (nameCount.get(area.name.toLowerCase()) ?? 0) > 1 && area.state ? `${area.name} (${area.state})` : area.name;
+    return {
+      region,
+      geo: {
+        region,
+        country_name: [area.state, area.country].filter(Boolean).join(', '),
+        latitude: Number(area.latitude),
+        longitude: Number(area.longitude),
+      },
+    };
   };
 }
 
@@ -114,10 +123,10 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
 }
 
 export function buildRegionSummaries(data: DashboardData): RegionSummary[] {
-  const lookup = makeRegionLookup(data.locations);
-  const healthByRegion = groupBy(data.midwifeHealth, (r) => lookup(r.midwife_code).region);
-  const socioByRegion = groupBy(data.socioeconomic, (r) => lookup(r.midwife_code).region);
-  const monthsByRegion = groupBy(data.midwifeMonths, (r) => lookup(r.midwife_id).region);
+  const lookup = makeAreaLookup(data.areas);
+  const healthByRegion = groupBy(data.midwifeHealth, (r) => lookup(r.area_id).region);
+  const socioByRegion = groupBy(data.socioeconomic, (r) => lookup(r.area_id).region);
+  const monthsByRegion = groupBy(data.midwifeMonths, (r) => lookup(r.area_id).region);
 
   return [...healthByRegion.entries()].map(([region, midwives]) => {
     const health = midwives.reduce(addHealth, emptyHealth());
@@ -136,7 +145,7 @@ export function buildRegionSummaries(data: DashboardData): RegionSummary[] {
 
     return {
       region,
-      geo: lookup(midwives[0].midwife_code).geo,
+      geo: lookup(midwives[0].area_id).geo,
       midwives,
       health,
       socioeconomic,
@@ -152,6 +161,6 @@ export function buildNationalTotals(data: DashboardData, summaries: RegionSummar
   return {
     health: summaries.reduce((acc, s) => addHealth(acc, s.health), emptyHealth()),
     operations: data.midwifeMonths.reduce(addOperations, emptyOperations()),
-    midwifeCount: data.midwifeHealth.length,
+    midwifeCount: new Set(data.midwifeHealth.map((r) => r.midwife_code)).size,
   };
 }

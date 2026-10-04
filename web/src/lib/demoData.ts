@@ -1,13 +1,13 @@
 import type {
+  AreaRow,
   DashboardData,
   DocumentDayRow,
-  LocationEntry,
   MidwifeHealthRow,
   MidwifeMonthRow,
   SocioeconomicRow,
 } from './types';
 
-// Generated sample data so the dashboard can run without n8n. Region names and
+// Generated sample data so the dashboard can run without n8n. Area names and
 // midwife codes are placeholders and every number is synthetic; the UI labels this
 // mode clearly.
 
@@ -83,7 +83,7 @@ export function generateDemoData(): DashboardData {
   const between = (lo: number, hi: number) => lo + rnd() * (hi - lo);
   const take = (n: number, rate: number) => Math.max(0, Math.min(n, Math.round(n * rate)));
 
-  const locations: LocationEntry[] = [];
+  const areas: AreaRow[] = [];
   const midwifeHealth: MidwifeHealthRow[] = [];
   const socioeconomic: SocioeconomicRow[] = [];
   const midwifeMonths: MidwifeMonthRow[] = [];
@@ -93,11 +93,12 @@ export function generateDemoData(): DashboardData {
     isoDate(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + i, 1))),
   );
 
-  for (const r of DEMO_REGIONS) {
+  for (const [index, r] of DEMO_REGIONS.entries()) {
     const rate = (key: RateKey) => Math.min(0.98, BASE[key] * (r.risk[key] ?? 1) * between(0.85, 1.15));
     const code = r.region.replace('Region ', '');
+    const areaId = index + 1;
     const midwifeCodes = Array.from({ length: 3 + Math.floor(rnd() * 4) }, (_, i) => `MW-${code}-${i + 1}`);
-    locations.push({ region: r.region, country: r.country, latitude: r.latitude, longitude: r.longitude, midwives: midwifeCodes });
+    areas.push({ area_id: areaId, name: r.region, state: '', country: r.country, latitude: r.latitude, longitude: r.longitude });
 
     for (const midwife of midwifeCodes) {
       const pregnancies = 60 + Math.floor(rnd() * 360);
@@ -127,6 +128,7 @@ export function generateDemoData(): DashboardData {
       const postpartumRecorded = take(deliveries, 0.85);
 
       midwifeHealth.push({
+        area_id: areaId,
         midwife_code: midwife,
         median_enrollment_ga_weeks: Math.round((8 + (1 - rate('firstTri')) * 16 + between(0, 2)) * 10) / 10,
         pregnancies,
@@ -202,7 +204,7 @@ export function generateDemoData(): DashboardData {
         const total = weights.reduce((a, b) => a + b, 0);
         values.forEach((value, i) => {
           const patients = take(take(pregnancies, 0.9), (weights[i] / total) * between(0.8, 1.2));
-          if (patients > 0) socioeconomic.push({ midwife_code: midwife, attribute, value, patients });
+          if (patients > 0) socioeconomic.push({ area_id: areaId, attribute, value, patients });
         });
       }
 
@@ -214,6 +216,7 @@ export function generateDemoData(): DashboardData {
         const recent = i >= months.length - 2 ? 2.5 : 1;
         midwifeMonths.push({
           midwife_id: midwife,
+          area_id: areaId,
           month,
           documents_captured: documents,
           documents_verified: take(documents, Math.min(1, rate('verified') / (i === months.length - 1 ? 1.6 : 1))),
@@ -277,10 +280,12 @@ export function generateDemoData(): DashboardData {
     }
   }
 
+  const women = midwifeHealth.reduce((n, r) => n + r.pregnancies, 0);
   return {
     source: 'demo',
     loadedAt: new Date(),
-    locations,
+    areas,
+    geocoding: { with_address: women, placed: women, pending: 0, not_found: 0 },
     midwifeHealth,
     socioeconomic,
     midwifeMonths,

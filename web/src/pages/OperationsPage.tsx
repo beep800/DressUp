@@ -4,7 +4,7 @@ import { StackedBar } from '../components/StackedBar';
 import { StatTile } from '../components/StatTile';
 import { TrendChart } from '../components/TrendChart';
 import { useReadyDashboard } from '../data/DataContext';
-import { addOperations, emptyOperations, makeRegionLookup, type OperationsTotals } from '../lib/aggregate';
+import { addOperations, emptyOperations, type OperationsTotals } from '../lib/aggregate';
 import { fmtDay, fmtInt, fmtPct, fmtSection, ratio } from '../lib/format';
 import type { DocumentDayRow } from '../lib/types';
 
@@ -87,12 +87,10 @@ const correctionRate = (t: DocTotals) => ratio(t.manual, t.manual + t.confirmed)
 
 interface MidwifeTotals extends OperationsTotals {
   id: string;
-  region: string;
 }
 
 const MIDWIFE_COLUMNS: Column<MidwifeTotals>[] = [
   { key: 'id', label: 'Midwife', sortValue: (r) => r.id, render: (r) => <span className="mono">{r.id}</span> },
-  { key: 'region', label: 'Region', sortValue: (r) => r.region },
   { key: 'registered', label: 'Women registered', numeric: true, sortValue: (r) => r.patients_registered, render: (r) => fmtInt(r.patients_registered) },
   { key: 'documents', label: 'Forms', numeric: true, sortValue: (r) => r.documents_captured, render: (r) => fmtInt(r.documents_captured) },
   {
@@ -186,12 +184,12 @@ export function OperationsPage() {
     return [...bySection.entries()].map(([section, t]) => ({ section, ...t }));
   }, [data.documentDays]);
 
+  // Totals per midwife across every area they work in.
   const midwives = useMemo<MidwifeTotals[]>(() => {
-    const lookup = makeRegionLookup(data.locations);
     const byId = new Map<string, OperationsTotals>();
     for (const r of data.midwifeMonths) byId.set(r.midwife_id, addOperations(byId.get(r.midwife_id) ?? emptyOperations(), r));
-    return [...byId.entries()].map(([id, t]) => ({ id, region: lookup(id).region, ...t }));
-  }, [data.midwifeMonths, data.locations]);
+    return [...byId.entries()].map(([id, t]) => ({ id, ...t }));
+  }, [data.midwifeMonths]);
 
   const statusGroups = groupStatuses(totals.statusCounts);
   const waiting = statusGroups.filter((g) => WAITING_GROUPS.has(g.key)).reduce((n, g) => n + g.value, 0);

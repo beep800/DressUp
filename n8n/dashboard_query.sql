@@ -1,6 +1,8 @@
 -- Maternal Health Atlas: dashboard data computed live from the census tables.
 -- Read-only. Returns one row with one JSON column, `payload`.
 -- This is the query inside the "Read census tables" node of the n8n workflow.
+-- n8n fills in the {{ ... }} expression below with each woman's map area from the
+-- "Geocode addresses" node. To run the query by hand, replace that expression with [].
 WITH settings AS (
   -- How the forms code their answers. Change these if yours differ.
   SELECT
@@ -9,10 +11,19 @@ WITH settings AS (
     0 AS test_negative_code   -- *_test_result value that means negative; anything else counts as not tested
 ),
 
+-- Each woman's map area, worked out from her address by the "Geocode addresses" node.
+-- Women whose address is missing or could not be placed have no row here.
+patient_areas AS (
+  SELECT x.original_id, x.area_id
+  FROM jsonb_to_recordset('{{ JSON.stringify($json.patientAreas) }}'::jsonb)
+    AS x (original_id integer, area_id integer)
+),
+
 -- One row per woman. OCR readings outside a plausible range are treated as missing.
 patients AS (
   SELECT
     coalesce(nullif(trim(p.midwife_code), ''), 'Unassigned') AS midwife_code,
+    pa.area_id,
     CASE WHEN p.age_years BETWEEN 10 AND 60 THEN p.age_years END AS age,
     p.desired_pregnancy,
     p.consanguinity,
@@ -45,6 +56,7 @@ patients AS (
   LEFT JOIN public.medical_family_history mh ON mh.original_id = p.original_id
   LEFT JOIN public.delivery               d  ON d.original_id  = p.original_id
   LEFT JOIN public.postpartum_newborn     pn ON pn.original_id = p.original_id
+  LEFT JOIN patient_areas                 pa ON pa.original_id = p.original_id
 ),
 
 flags AS (
@@ -63,6 +75,7 @@ flags AS (
 
 health AS (
   SELECT
+    area_id,
     midwife_code,
     count(*) AS pregnancies,
 
@@ -136,17 +149,18 @@ health AS (
     count(referral_to_higher_care) AS referral_recorded,
     count(*) FILTER (WHERE referral_to_higher_care > 0) AS referred_to_higher_care
   FROM flags
-  GROUP BY midwife_code
+  GROUP BY area_id, midwife_code
 ),
 
--- How many of each midwife's patients gave each answer.
+-- How many women in each area gave each answer.
 socioeconomic AS (
   SELECT
-    coalesce(nullif(trim(p.midwife_code), ''), 'Unassigned') AS midwife_code,
+    pa.area_id,
     a.attribute,
     lower(trim(a.value)) AS value,
     count(*) AS patients
   FROM public.patient_identification p
+  LEFT JOIN patient_areas pa ON pa.original_id = p.original_id
   CROSS JOIN LATERAL (VALUES
     ('education_level', p.education_level),
     ('profession', p.profession),
@@ -156,11 +170,12 @@ socioeconomic AS (
   GROUP BY 1, 2, 3
 ),
 
--- Forms from the last 24 months.
+-- Forms from the last 24 months, with the area of the woman they belong to.
 docs AS (
   SELECT
     ds.id,
     coalesce(nullif(trim(ds.midwife_id), ''), 'Unassigned') AS midwife_id,
+    pa.area_id,
     coalesce(nullif(trim(ds.document_section), ''), 'UNKNOWN') AS section,
     coalesce(ds.status, 'UNKNOWN') AS status,
     ds.verified_by_midwife,
@@ -169,6 +184,8 @@ docs AS (
     ds.created_at::date AS capture_date,
     date_trunc('month', ds.created_at)::date AS month
   FROM public.document_submissions ds
+  LEFT JOIN public.patient_identification pref ON pref.id = ds.patient_ref
+  LEFT JOIN patient_areas pa ON pa.original_id = coalesce(pref.original_id, ds.original_id)
   WHERE ds.created_at >= date_trunc('month', current_date) - interval '23 months'
 ),
 
@@ -177,6 +194,7 @@ first_forms AS (
   SELECT DISTINCT ON (woman)
     woman,
     coalesce(nullif(trim(midwife_id), ''), 'Unassigned') AS midwife_id,
+    (SELECT pa.area_id FROM patient_areas pa WHERE pa.original_id = woman) AS area_id,
     date_trunc('month', created_at)::date AS month
   FROM (
     SELECT coalesce(p.original_id, ds.original_id) AS woman, ds.midwife_id, ds.created_at
@@ -190,6 +208,7 @@ first_forms AS (
 midwife_months AS (
   SELECT
     d.midwife_id,
+    d.area_id,
     d.month,
     count(*) AS documents_captured,
     count(*) FILTER (WHERE d.verified_by_midwife) AS documents_verified,
@@ -201,9 +220,9 @@ midwife_months AS (
     coalesce(max(r.registered), 0) AS patients_registered
   FROM docs d
   LEFT JOIN (
-    SELECT midwife_id, month, count(*) AS registered FROM first_forms GROUP BY 1, 2
-  ) r ON r.midwife_id = d.midwife_id AND r.month = d.month
-  GROUP BY d.midwife_id, d.month
+    SELECT midwife_id, area_id, month, count(*) AS registered FROM first_forms GROUP BY 1, 2, 3
+  ) r ON r.midwife_id = d.midwife_id AND r.area_id IS NOT DISTINCT FROM d.area_id AND r.month = d.month
+  GROUP BY d.midwife_id, d.area_id, d.month
 ),
 
 -- OCR field results per form, for the last 180 days.
@@ -264,8 +283,8 @@ document_days AS (
 )
 
 SELECT json_build_object(
-  'midwifeHealth', (SELECT coalesce(json_agg(h ORDER BY h.midwife_code), '[]'::json) FROM health h),
-  'socioeconomic', (SELECT coalesce(json_agg(s ORDER BY s.midwife_code, s.attribute, s.patients DESC), '[]'::json) FROM socioeconomic s),
-  'midwifeMonths', (SELECT coalesce(json_agg(m ORDER BY m.midwife_id, m.month), '[]'::json) FROM midwife_months m),
+  'midwifeHealth', (SELECT coalesce(json_agg(h ORDER BY h.area_id, h.midwife_code), '[]'::json) FROM health h),
+  'socioeconomic', (SELECT coalesce(json_agg(s ORDER BY s.area_id, s.attribute, s.patients DESC), '[]'::json) FROM socioeconomic s),
+  'midwifeMonths', (SELECT coalesce(json_agg(m ORDER BY m.midwife_id, m.area_id, m.month), '[]'::json) FROM midwife_months m),
   'documentDays',  (SELECT coalesce(json_agg(dd ORDER BY dd.capture_date, dd.document_section), '[]'::json) FROM document_days dd)
 ) AS payload;

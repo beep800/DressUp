@@ -30,6 +30,7 @@ export function OverviewPage() {
         selected={selected}
         onSelect={selectFromList}
         demo={data.source === 'demo'}
+        geocoding={data.geocoding}
       />
     </div>
   );

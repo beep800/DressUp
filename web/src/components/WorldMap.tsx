@@ -6,7 +6,8 @@ import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { feature } from 'topojson-client';
 import type { GeometryCollection, Topology } from 'topojson-specification';
-import worldAtlas from 'world-atlas/countries-110m.json';
+// 1:50m borders stay recognisable when zoomed in on towns a few kilometres apart.
+import worldAtlas from 'world-atlas/countries-50m.json';
 import type { RegionSummary } from '../lib/aggregate';
 import { LEVEL_META, LEVEL_RANK, type ConcernLevel } from '../lib/concern';
 import { RegionPopup } from './RegionPopup';
@@ -14,7 +15,7 @@ import { RegionPopup } from './RegionPopup';
 const world = worldAtlas as unknown as Topology<{ countries: GeometryCollection }>;
 const COUNTRIES = (feature(world, world.objects.countries) as unknown as FeatureCollection<Geometry>).features;
 
-const MAX_ZOOM = 16;
+const MAX_ZOOM = 64;
 const LABEL_ZOOM = 2.5;
 const POPUP_WIDTH = 320;
 const DOCK_BELOW = 600;
@@ -177,17 +178,56 @@ export function WorldMap({
       .call(behavior.scaleBy, factor);
   };
 
-  const fitFlagged = () => {
-    const flagged = markers.filter((m) => m.summary.assessment.level === 'high' || m.summary.assessment.level === 'elevated');
-    const targets = flagged.length > 0 ? flagged : markers;
+  /** Zooms so every target marker is in view, with room around them. */
+  const fitTo = (targets: Marker[], duration?: number) => {
     if (targets.length === 0) return;
     const xs = targets.map((m) => m.x);
     const ys = targets.map((m) => m.y);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-    const pad = 80;
-    const k = Math.min(MAX_ZOOM, Math.max(1, Math.min(size.w / (x1 - x0 + pad * 2), size.h / (y1 - y0 + pad * 2))));
-    animate(centerOn((x0 + x1) / 2, (y0 + y1) / 2, k));
+    const pad = 90;
+    const spanX = x1 - x0;
+    const spanY = y1 - y0;
+    // A single place (or several on the same spot) opens at a regional zoom.
+    const k =
+      spanX === 0 && spanY === 0
+        ? 24
+        : Math.min(
+            spanX > 0 ? (size.w - pad * 2) / spanX : Infinity,
+            spanY > 0 ? (size.h - pad * 2) / spanY : Infinity,
+          );
+    animate(centerOn((x0 + x1) / 2, (y0 + y1) / 2, Math.min(MAX_ZOOM, Math.max(1, k))), duration);
   };
+
+  const fitFlagged = () => {
+    const flagged = markers.filter((m) => m.summary.assessment.level === 'high' || m.summary.assessment.level === 'elevated');
+    fitTo(flagged.length > 0 ? flagged : markers);
+  };
+
+  // Open on the markers rather than the whole world, once the map has a size.
+  const fittedRef = useRef(false);
+  useEffect(() => {
+    if (fittedRef.current || markers.length === 0 || !zoomRef.current) return;
+    fittedRef.current = true;
+    fitTo(markers, 0);
+    // Runs once, after the first render that has both a size and markers.
+  }, [markers, size.w, size.h]);
+
+  // Show a name only where it doesn't overlap a name already placed; the most
+  // concerning areas are placed first. Hidden names appear as you zoom in.
+  const labelled = useMemo(() => {
+    const shown = new Set<string>();
+    if (transform.k < LABEL_ZOOM) return shown;
+    const boxes: { x0: number; x1: number; y0: number; y1: number }[] = [];
+    for (const m of [...markers].reverse()) {
+      const x = transform.applyX(m.x) + MARKER_RADIUS[m.summary.assessment.level] + 6;
+      const y = transform.applyY(m.y);
+      const box = { x0: x - 4, x1: x + m.summary.region.length * 7 + 4, y0: y - 9, y1: y + 9 };
+      if (boxes.some((b) => b.x0 < box.x1 && box.x0 < b.x1 && b.y0 < box.y1 && box.y0 < b.y1)) continue;
+      boxes.push(box);
+      shown.add(m.summary.region);
+    }
+    return shown;
+  }, [markers, transform]);
 
   const selectedMarker = markers.find((m) => m.summary.region === selected);
   const hoveredMarker = hovered && hovered !== selected ? markers.find((m) => m.summary.region === hovered) : undefined;
@@ -260,7 +300,7 @@ export function WorldMap({
                       !
                     </text>
                   )}
-                  {transform.k >= LABEL_ZOOM && (
+                  {labelled.has(region) && (
                     <text className="marker-label" x={r + 6} dy="0.35em">
                       {region}
                     </text>

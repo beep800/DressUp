@@ -5,9 +5,10 @@ A web dashboard for the midwife census. It reads your existing census tables
 `medical_family_history`, `delivery`, `postpartum_newborn`, `document_submissions`,
 `fields`) through an n8n workflow, and shows:
 
-- **Regions:** a world map where each region is coloured by concern level. Select a
-  marker to see why the region was flagged, then open its detail page. Beside the map
-  are overall totals and a card per region with its headline indicators.
+- **Regions:** a world map with one marker per town, worked out from the women's
+  addresses and coloured by concern level. Select a marker to see why the area was
+  flagged, then open its detail page. Beside the map are overall totals and a card per
+  area with its headline indicators.
 - **Region details:** every flagged indicator with its count, flag level and
   rationale; all indicators by domain; caesarean and preterm rates for women with and
   without a previous stillbirth; education and profession answers; women registered
@@ -27,19 +28,20 @@ npm install
 npm run dev        # http://localhost:5173, demo data
 ```
 
-To use your data, follow `../n8n/README.md`: import the workflow into n8n, set
-`VITE_DATA_URL` in `.env`, and list your regions in `public/locations.json`.
+To use your data, follow `../n8n/README.md`: import the workflow into n8n and set
+`VITE_DATA_URL`, `N8N_URL` and `N8N_KEY` in `.env`.
 
 `npm run build` writes a static site to `dist/`, and `npm run preview` serves it on
 http://localhost:4173 with the same n8n proxy.
 
 ## Where the numbers come from
 
-The n8n query (`../n8n/dashboard_query.sql`) counts, for each midwife code, how many
+The n8n workflow places each woman's address in a town
+(`../n8n/geocode_addresses.js`). It then counts, for each town and midwife, how many
 women have each measurement recorded and how many of those cross a clinical
-threshold, for example women with haemoglobin recorded and women under 10 g/dL. It
-sends counts only. The app groups midwives into regions using `public/locations.json`,
-sums their counts, and only then works out rates, so regional figures are exact
+threshold, for example women with haemoglobin recorded and women under 10 g/dL
+(`../n8n/dashboard_query.sql`). It sends counts and town positions only. The app sums
+each town's counts across midwives and only then works out rates, so figures are exact
 rather than averages of averages.
 
 Not available from the current tables, so not shown: stillbirths in this delivery
@@ -64,11 +66,10 @@ all follow.
 ## Layout
 
 ```
-public/locations.json  which midwives work in each region, and where each region is
 src/
   lib/types.ts         shape of the JSON the n8n workflow returns
-  lib/api.ts           fetches the workflow's JSON and locations.json
-  lib/aggregate.ts     sums midwife counts into regions and overall totals
+  lib/api.ts           fetches the workflow's JSON
+  lib/aggregate.ts     sums counts into areas and overall totals
   lib/concern.ts       indicators, flag levels and region assessment
   lib/demoData.ts      generated sample data for running without n8n
   components/          map, popup, sidebar, charts, tables
