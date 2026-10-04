@@ -18,11 +18,13 @@ export function RegionSidebar({
   national,
   selected,
   onSelect,
+  demo,
 }: {
   summaries: RegionSummary[];
   national: NationalTotals;
   selected: string | null;
   onSelect: (region: string) => void;
+  demo: boolean;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('concern');
@@ -56,6 +58,11 @@ export function RegionSidebar({
 
   return (
     <aside className="sidebar" aria-label="Regional statistics">
+      {demo && (
+        <p className="note">
+          These are generated demo numbers, not census figures. Connect Supabase in <code>.env</code> to see your data.
+        </p>
+      )}
       <div className="kpi-grid">
         <StatTile
           label="Regions of concern"

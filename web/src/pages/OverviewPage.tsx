@@ -4,7 +4,7 @@ import { WorldMap } from '../components/WorldMap';
 import { useReadyDashboard } from '../data/DataContext';
 
 export function OverviewPage() {
-  const { summaries, national } = useReadyDashboard();
+  const { data, summaries, national } = useReadyDashboard();
   const [selected, setSelected] = useState<string | null>(null);
   const [flyTo, setFlyTo] = useState<{ region: string; n: number } | null>(null);
 
@@ -24,7 +24,13 @@ export function OverviewPage() {
         </div>
         <WorldMap summaries={summaries} selected={selected} onSelect={setSelected} flyTo={flyTo} />
       </section>
-      <RegionSidebar summaries={summaries} national={national} selected={selected} onSelect={selectFromList} />
+      <RegionSidebar
+        summaries={summaries}
+        national={national}
+        selected={selected}
+        onSelect={selectFromList}
+        demo={data.source === 'demo'}
+      />
     </div>
   );
 }
