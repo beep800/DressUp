@@ -203,12 +203,14 @@ export function WorldMap({
     fitTo(flagged.length > 0 ? flagged : markers);
   };
 
-  // Open on the markers rather than the whole world, once the map has a size.
+  // Open on the markers rather than the whole world, once the map has a size. Areas with
+  // too few records to assess are left out, so one far-away address doesn't zoom it out.
   const fittedRef = useRef(false);
   useEffect(() => {
     if (fittedRef.current || markers.length === 0 || !zoomRef.current) return;
     fittedRef.current = true;
-    fitTo(markers, 0);
+    const assessed = markers.filter((m) => m.summary.assessment.level !== 'no-data');
+    fitTo(assessed.length > 0 ? assessed : markers, 0);
     // Runs once, after the first render that has both a size and markers.
   }, [markers, size.w, size.h]);
 

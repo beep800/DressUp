@@ -10,7 +10,8 @@ The workflow reads the tables you already have and never writes to them:
 
 1. **Read addresses** reads each woman's `address`.
 2. **Geocode addresses** (`geocode_addresses.js`) turns each address into a town on the
-   map, using OpenStreetMap's geocoder. Each address is looked up once and remembered.
+   map, using OpenStreetMap's geocoder, with Photon as a backup. Each address is looked
+   up once and remembered.
 3. **Read census tables** (`dashboard_query.sql`) counts, for each town and midwife,
    how many women have each measurement recorded and how many cross a clinical
    threshold.
@@ -122,22 +123,26 @@ http://localhost:4173. The proxy and key work there too.
 ## 4. How addresses become map areas
 
 The **Geocode addresses** node sends each address to OpenStreetMap's free geocoder
-(Nominatim) and groups women by the town it returns. Its settings are at the top of
-the node's code:
+(Nominatim) and groups women by the town it returns. When OpenStreetMap is unavailable
+or finds nothing, it asks Photon, a second free geocoder built on OpenStreetMap data.
+Its settings are at the top of the node's code:
 
 | Setting | What it does |
 |---|---|
-| `CONTACT_EMAIL` | OpenStreetMap's usage policy asks for a contact address. Put yours here. |
-| `COUNTRY_CODES` | Limits matches to your countries, e.g. `'ma'`. Makes short or ambiguous addresses much more reliable. |
+| `COUNTRY_CODES` | Limits matches to your countries, e.g. `'sn'`. Makes short or ambiguous addresses much more reliable. |
 | `AREA_LEVEL` | `'town'` (default), `'county'` or `'state'`: how finely women are grouped on the map. |
-| `MAX_LOOKUPS_PER_REQUEST` | New addresses looked up per page load, at one per second (default 15). |
+| `CONTACT_EMAIL` | OpenStreetMap's usage policy asks for a contact address. Put yours here. |
 | `GEOCODER_URL` | Point this at your own Nominatim server to keep addresses off third-party services. |
+| `FALLBACK_GEOCODER_URL` | The backup geocoder (Photon). `''` turns it off. |
+| `MAX_LOOKUPS_PER_REQUEST` | New addresses looked up per page load, at about one per second (default 10). |
+| `KNOWN_PLACES` | Addresses placed by hand, never sent to a geocoder. Holds the four sample towns; add an address here to correct one the geocoders put in the wrong place. |
 
 What leaves your systems, and what is kept:
 
-- **Sent to OpenStreetMap:** the address text only. No name, ID or health data. If
-  your data protection rules don't allow sending patient addresses to an outside
-  service, set `GEOCODER_URL` to a Nominatim server you host.
+- **Sent to OpenStreetMap, and to Photon when OpenStreetMap can't help:** the address
+  text only. No name, ID or health data. If your data protection rules don't allow
+  sending patient addresses to an outside service, set `GEOCODER_URL` to a Nominatim
+  server you host and `FALLBACK_GEOCODER_URL` to `''`.
 - **Kept in n8n:** the workflow remembers each address's town, county, state, country
   and coordinates rounded to about 1 km, keyed by a hash of the address, never the
   address itself. Successful runs are not saved in n8n's execution history, because
@@ -145,11 +150,13 @@ What leaves your systems, and what is kept:
 - **Shown on the dashboard:** one marker per town, placed at the average of its
   women's locations rounded to about 10 km, never anyone's home.
 
-The first page loads place addresses gradually, 15 at a time, and the sidebar says
-how many are still waiting. Addresses the geocoder can't find, and women with no
-address, are counted under "Location unknown". They are retried after a week, in case
-the address was corrected. The workflow only remembers lookups made from its live
-webhook, not from manual test runs in the n8n editor.
+The first page loads place addresses gradually, 10 at a time, and the sidebar says
+how many are still waiting. If both geocoders fail, the sidebar says what they answered
+(for example "OpenStreetMap answered 429", too many requests) and the next page load
+tries again. Addresses neither geocoder can find, and women with no address, are
+counted under "Location unknown"; they are retried after a day. The workflow only
+remembers lookups made from its live webhook, not from manual test runs in the n8n
+editor.
 
 ## While there is little data
 
@@ -173,5 +180,8 @@ back into the file so the two don't drift apart.
 - **It answered 404:** the workflow isn't active, or the webhook path was changed.
 - **It answered 500:** open the workflow's **Executions** tab in n8n for the database error.
 - **A rate looks impossible** (a caesarean rate of 90%, say): check the codes in step 2.
-- **Everyone is under "Location unknown":** open the **Geocode addresses** node's output
-  in the Executions tab, or set `COUNTRY_CODES` so short addresses match your country.
+- **Women are missing from the map:** the sidebar under the region list says whether
+  their addresses are waiting, failed to look up (and why) or could not be found. Set
+  `COUNTRY_CODES` so short addresses match your country.
+- **A marker is in the wrong place:** the geocoder matched the wrong town of that name.
+  Set `COUNTRY_CODES`, or add the address to `KNOWN_PLACES` with the right coordinates.

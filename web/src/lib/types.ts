@@ -150,6 +150,8 @@ export interface GeocodingStatus {
   /** Not looked up yet; a few are looked up on each page load. */
   pending: number;
   not_found: number;
+  /** Why the last lookups failed, e.g. "OpenStreetMap answered 429". */
+  problem?: string;
 }
 
 export interface RegionGeo {
