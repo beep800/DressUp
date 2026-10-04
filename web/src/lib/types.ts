@@ -147,7 +147,7 @@ export interface OcrDayRow {
 }
 
 export interface DashboardData {
-  source: 'supabase' | 'demo';
+  source: 'supabase' | 'endpoint' | 'demo';
   loadedAt: Date;
   regions: RegionGeo[];
   facilityHealth: FacilityHealthRow[];

@@ -60,7 +60,8 @@ export function RegionSidebar({
     <aside className="sidebar" aria-label="Regional statistics">
       {demo && (
         <p className="note">
-          These are generated demo numbers, not census figures. Connect Supabase in <code>.env</code> to see your data.
+          These are generated demo numbers, not census figures. Point <code>.env</code> at your n8n workflow or
+          Supabase project to see your data.
         </p>
       )}
       <div className="kpi-grid">

@@ -1,0 +1,147 @@
+{
+  "name": "Maternal Health Atlas",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "maternal-health-atlas",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c4c0a504-642f-55bd-9acb-01816ea2764a",
+      "name": "Dashboard request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "f0f7d7bf-6e4c-515e-930c-3070b6e7f342"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Every dashboard view as one JSON object, shaped the way the web app expects.\nSELECT json_build_object(\n  'regions', (\n    SELECT coalesce(json_agg(r ORDER BY r.region), '[]'::json)\n    FROM analytics.ref_region r),\n  'facilityHealth', (\n    SELECT coalesce(json_agg(h ORDER BY h.facility_id), '[]'::json)\n    FROM analytics.mv_regional_health_indicators h),\n  'facilityDeliveries', (\n    SELECT coalesce(json_agg(d ORDER BY d.facility_id, d.place_of_delivery), '[]'::json)\n    FROM analytics.mv_facility_delivery_outcomes d),\n  -- Last 24 months and 180 days keep the response small; widen if you need more history.\n  'midwifeMonths', (\n    SELECT coalesce(json_agg(m ORDER BY m.midwife_id, m.report_month), '[]'::json)\n    FROM analytics.mv_midwife_monthly_performance m\n    WHERE m.report_month >= date_trunc('month', current_date) - interval '23 months'),\n  'ocrDays', (\n    SELECT coalesce(json_agg(o ORDER BY o.capture_date, o.document_section), '[]'::json)\n    FROM analytics.mv_ocr_extraction_quality o\n    WHERE o.capture_date >= current_date - 179)\n) AS payload;",
+        "options": {}
+      },
+      "id": "10af81ba-185d-560c-88ce-1c699dd47378",
+      "name": "Read dashboard views",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase (n8n_dashboard)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.payload }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "2a1c8260-a4e4-55d3-90a9-4b045df9d870",
+      "name": "Send to dashboard",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "124f7ffc-f4be-5b57-8e7e-63921079f509",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT analytics.refresh_reporting_views();",
+        "options": {}
+      },
+      "id": "9ef0024d-d5fa-5bca-8a60-7aeca2904a22",
+      "name": "Refresh dashboard views",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase (n8n_dashboard)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Dashboard request": {
+      "main": [
+        [
+          {
+            "node": "Read dashboard views",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read dashboard views": {
+      "main": [
+        [
+          {
+            "node": "Send to dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Refresh dashboard views",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -11,7 +11,13 @@ A web dashboard for the midwife census. It reads the aggregate views from
 - **Data capture:** the paper-to-digital pipeline. Where each form section is, OCR
   confidence, illegible fields, sync failures, and verification by midwife.
 
-Without Supabase settings it runs on generated demo data, labelled "Demo data" in the
+It can get its data two ways:
+
+- **Through n8n** (recommended for running on your own machine): an n8n workflow reads
+  Supabase and the app fetches one JSON response from it. See `../n8n/README.md`.
+- **Directly from Supabase**, with each analyst signing in. See "Connect Supabase" below.
+
+With neither configured it runs on generated demo data, labelled "Demo data" in the
 top bar.
 
 ## Run it
@@ -22,8 +28,8 @@ npm install
 npm run dev        # http://localhost:5173, demo data
 ```
 
-To use your database, copy `.env.example` to `.env` and fill in the project URL
-and anon key (Supabase → Project Settings → API), then restart `npm run dev`.
+To use your data, copy `.env.example` to `.env` and set either `VITE_DATA_URL`
+(n8n) or the Supabase URL and anon key, then restart `npm run dev`.
 
 `npm run build` writes a static site to `dist/`. It uses hash routing and relative
 paths, so any static host works (Netlify, Vercel, S3, a ministry web server) with no
@@ -70,7 +76,7 @@ all follow.
 ```
 src/
   lib/types.ts        row types for each analytics view
-  lib/api.ts          loads every view (paging past Supabase's 1,000-row cap)
+  lib/api.ts          loads every view from n8n, or from Supabase (paging past its 1,000-row cap)
   lib/aggregate.ts    sums facility rows into regions and national totals
   lib/concern.ts      indicators, flag levels and region assessment
   lib/demoData.ts     generated sample data for running without a database
