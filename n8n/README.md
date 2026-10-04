@@ -67,10 +67,10 @@ them in step.
 To see which codes your data actually uses, run this in the Supabase SQL editor:
 
 ```sql
-SELECT 'type_of_delivery' AS col, type_of_delivery::text AS code, count(*) FROM delivery GROUP BY 2
-UNION ALL SELECT 'hiv_test_result', hiv_test_result::text, count(*) FROM current_pregnancy GROUP BY 2
-UNION ALL SELECT 'syphilis_test_result', syphilis_test_result::text, count(*) FROM current_pregnancy GROUP BY 2
-UNION ALL SELECT 'desired_pregnancy', desired_pregnancy::text, count(*) FROM patient_identification GROUP BY 2
+SELECT 'type_of_delivery' AS col, type_of_delivery::text AS code, count(1) AS n FROM delivery GROUP BY 2
+UNION ALL SELECT 'hiv_test_result', hiv_test_result::text, count(1) FROM current_pregnancy GROUP BY 2
+UNION ALL SELECT 'syphilis_test_result', syphilis_test_result::text, count(1) FROM current_pregnancy GROUP BY 2
+UNION ALL SELECT 'desired_pregnancy', desired_pregnancy::text, count(1) FROM patient_identification GROUP BY 2
 ORDER BY 1, 2;
 ```
 
