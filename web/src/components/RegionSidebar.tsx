@@ -23,7 +23,9 @@ function locationNotes(national: NationalTotals, geocoding: GeocodingStatus | nu
   const noAddress = national.health.pregnancies - geocoding.with_address;
   if (geocoding.pending > 0) {
     notes.push(
-      `${plural(geocoding.pending, 'address is', 'addresses are')} still being placed on the map, a few on each load. Reload the page in a minute to place more.`,
+      geocoding.problem
+        ? `${plural(geocoding.pending, 'address is', 'addresses are')} not on the map yet because the address lookup failed (${geocoding.problem}). Reload the page in a few minutes to try again.`
+        : `${plural(geocoding.pending, 'address is', 'addresses are')} still being placed on the map, a few on each load. Reload the page in a minute to place more.`,
     );
   }
   if (geocoding.not_found > 0) {
