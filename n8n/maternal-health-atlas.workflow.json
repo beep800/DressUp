@@ -5,6 +5,7 @@
       "parameters": {
         "httpMethod": "GET",
         "path": "maternal-health-atlas",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -16,7 +17,13 @@
         0,
         0
       ],
-      "webhookId": "f0f7d7bf-6e4c-515e-930c-3070b6e7f342"
+      "webhookId": "f0f7d7bf-6e4c-515e-930c-3070b6e7f342",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Dashboard key"
+        }
+      }
     },
     {
       "parameters": {

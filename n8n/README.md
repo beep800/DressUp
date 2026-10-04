@@ -1,56 +1,59 @@
 # Serving the dashboard through n8n
 
 ```
-Your census database ──► n8n workflow ──► http://localhost:5678/webhook/maternal-health-atlas
-                                                    ▲
-Browser ──► http://localhost:5173 (Vite) ── /n8n/… proxy
+Census database ──► n8n workflow ──► https://<your-name>.app.n8n.cloud/webhook/maternal-health-atlas
+                                                     ▲  (needs the dashboard key)
+Browser ──► http://localhost:5173 (Vite) ── /n8n/… proxy, adds the key
 ```
 
 The workflow runs one read-only query, `dashboard_query.sql`, against the tables you
 already have. It returns totals per midwife, never individual patient rows. Nothing
-is created or changed in the database. The web app runs on your machine and fetches
-those totals through Vite's proxy, so the browser never sees a database password.
+is created or changed in the database. Everything is computed live on each page load.
 
-Everything is computed live on each page load, so the dashboard always shows the
-current state of the tables.
+The web app runs on your computer and fetches those totals through Vite's proxy. The
+proxy adds a secret key to each request. n8n refuses requests without it, which
+matters on n8n Cloud, where the webhook address is reachable from the internet. The
+key stays in `web/.env` on your computer and never reaches the browser.
 
-This setup is meant for one machine. n8n and Vite listen on localhost only; don't
-expose port 5678 to a network, because the webhook has no login of its own.
+## 1. Import the workflow into n8n
 
-## 1. Start n8n
-
-If you already run n8n (for example for the WhatsApp/Telegram capture bot), use that
-instance and skip to step 2. Otherwise, with Docker:
-
-```bash
-docker run -it --rm --name n8n \
-  -p 127.0.0.1:5678:5678 \
-  -v n8n_data:/home/node/.n8n \
-  docker.n8n.io/n8nio/n8n
-```
-
-Or without Docker: `npx n8n`. Open http://localhost:5678.
-
-## 2. Import the workflow
+These steps are the same on n8n Cloud and on n8n running on your computer.
 
 1. **Create workflow** → **⋯** menu → **Import from file** → choose
    `n8n/maternal-health-atlas.workflow.json`.
-2. Open **Read census tables** and pick a Postgres credential that can read your
-   census tables. If n8n already has one for this database, reuse it. Otherwise
-   create one from Supabase → **Connect** → **Session pooler** (host, port 5432,
-   database `postgres`, user `postgres.<project-ref>`, your database password, SSL on).
-3. Save, then activate the workflow with the toggle at the top (labelled Publish in newer
+2. Open **Dashboard request**. Under Credential for Header Auth, choose **Create new
+   credential**:
+   - **Name:** `X-Dashboard-Key`
+   - **Value:** a long random string. A password manager's generator works, or run
+     `openssl rand -hex 32`. Keep a copy for step 3.
+
+   Save the credential as `Dashboard key`.
+3. Open **Read census tables** and choose a Postgres credential for your database.
+   To create one, use Supabase → **Connect** → **Session pooler**:
+
+   | Field | Value |
+   |---|---|
+   | Host | `aws-0-<region>.pooler.supabase.com` (as shown in Supabase) |
+   | Port | `5432` |
+   | Database | `postgres` |
+   | User | `postgres.<project-ref>` |
+   | Password | your database password |
+   | SSL | Require |
+
+4. Save, then activate the workflow with the toggle at the top (labelled Publish in newer
    n8n versions).
 
-Check it:
+Check it, replacing the address and key with yours:
 
 ```bash
-curl -s http://localhost:5678/webhook/maternal-health-atlas | head -c 300
+curl -s -H "X-Dashboard-Key: <your key>" \
+  https://<your-name>.app.n8n.cloud/webhook/maternal-health-atlas | head -c 300
 ```
 
-You should see JSON starting with `{"midwifeHealth":[`.
+You should see JSON starting with `{"midwifeHealth":[`. Without the header, n8n
+answers 403.
 
-## 3. Check how your forms code answers
+## 2. Check how your forms code answers
 
 The query assumes these codes. If yours differ, edit the `settings` block at the top
 of the query in the **Read census tables** node, and in `dashboard_query.sql` to keep
@@ -78,7 +81,7 @@ Readings outside a plausible range (age 10–60, blood pressure, haemoglobin 2�
 birth weight 300–6,500 g and so on) are treated as missing, since they are usually OCR
 misreads. Haemoglobin values that look like g/L (for example 105) are converted to g/dL.
 
-## 4. Run the web app
+## 3. Run the web app
 
 ```bash
 cd web
@@ -89,9 +92,11 @@ In `.env`, set:
 
 ```
 VITE_DATA_URL=/n8n/webhook/maternal-health-atlas
+N8N_URL=https://<your-name>.app.n8n.cloud
+N8N_KEY=<the same key as in step 1>
 ```
 
-Then:
+`N8N_URL` is the address of your n8n, without `/webhook/...`. Then:
 
 ```bash
 npm install
@@ -102,10 +107,12 @@ Open http://localhost:5173. The top bar shows "Updated" with the time of the las
 load instead of "Demo data". Reload the page to fetch fresh numbers.
 
 To serve the production build instead: `npm run build && npm run preview`, then open
-http://localhost:4173. If n8n runs somewhere other than `localhost:5678`, set
-`N8N_URL` in `.env`.
+http://localhost:4173. The proxy and key work there too.
 
-## 5. Put regions on the map
+## 4. Optional: put regions on the map
+
+Skip this while you have only one or two midwives. Each midwife then appears in the
+sidebar as their own area, and every page works; only the map stays empty.
 
 Your tables link each woman to a `midwife_code` but not to a place, so regions come
 from `web/public/locations.json`. List each region with its centre point and the
@@ -131,9 +138,18 @@ without regard to case. Midwives not listed appear in the sidebar as their own a
 off the map. Edit the file and reload the page; no rebuild is needed while
 `npm run dev` is running.
 
+## While there is little data
+
+A rate is only flagged once it rests on at least 30 records (`MIN_DENOMINATOR` in
+`web/src/lib/concern.ts`). Until then regions show "Too few records" and grey map
+markers, and their counts are still shown. Flags appear as records come in.
+
 ## When something fails
 
-- **The dashboard could not reach the workflow:** n8n isn't running, or `N8N_URL` is wrong.
+- **The dashboard could not reach the workflow:** check `N8N_URL` in `.env`, then
+  restart `npm run dev`.
+- **It answered 403:** `N8N_KEY` doesn't match the value in the `Dashboard key`
+  credential, or `.env` was changed without restarting `npm run dev`.
 - **It answered 404:** the workflow isn't active, or the webhook path was changed.
 - **It answered 500:** open the workflow's **Executions** tab in n8n for the database error.
-- **A rate looks impossible** (a caesarean rate of 90%, say): check the codes in step 3.
+- **A rate looks impossible** (a caesarean rate of 90%, say): check the codes in step 2.
