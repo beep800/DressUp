@@ -1,17 +1,12 @@
-import type { DeliveryCounts, HealthCounts } from './types';
+import type { HealthCounts } from './types';
 
 // Rules that decide when a region is an area of concern. Each indicator is a rate
-// with an explicit numerator and denominator from the analytics views. Flag levels
+// with an explicit numerator and denominator counted from the census tables. Flag levels
 // cite their source in `basis`; "programme default" levels are starting points for
 // the ministry to tune here.
 
-export interface CountsBundle {
-  health: HealthCounts;
-  delivery: DeliveryCounts;
-}
-
-export type Domain = 'Demographics' | 'Maternal health' | 'Newborn outcomes' | 'Care & referral';
-export const DOMAINS: Domain[] = ['Demographics', 'Maternal health', 'Newborn outcomes', 'Care & referral'];
+export type Domain = 'Demographics & history' | 'Maternal health' | 'Newborn outcomes' | 'Care & referral';
+export const DOMAINS: Domain[] = ['Demographics & history', 'Maternal health', 'Newborn outcomes', 'Care & referral'];
 
 export type Rule =
   | { kind: 'above'; concern: number; severe: number }
@@ -24,10 +19,10 @@ export interface IndicatorDef {
   label: string;
   domain: Domain;
   unit: 'percent' | 'per1000';
-  /** What the denominator counts, e.g. "live births weighed". */
+  /** What the denominator counts, e.g. "births weighed". */
   of: string;
   rule: Rule;
-  ratio: (c: CountsBundle) => [numerator: number, denominator: number];
+  ratio: (h: HealthCounts) => [numerator: number, denominator: number];
   why: string;
   basis: string;
 }
@@ -36,61 +31,94 @@ export interface IndicatorDef {
 export const MIN_DENOMINATOR = 30;
 
 export const INDICATORS: IndicatorDef[] = [
-  // Demographics
+  // Demographics & history
   {
     id: 'adolescent',
     label: 'Adolescent pregnancies',
-    domain: 'Demographics',
+    domain: 'Demographics & history',
     unit: 'percent',
-    of: 'pregnancies with age recorded',
+    of: 'women with age recorded',
     rule: { kind: 'above', concern: 0.15, severe: 0.25 },
-    ratio: ({ health: h }) => [h.adolescent_pregnancies, h.age_recorded],
+    ratio: (h) => [h.adolescent_pregnancies, h.age_recorded],
     why: 'Mothers under 18 face higher risks of eclampsia, obstructed labour and low birth weight babies.',
     basis: 'Programme default.',
   },
   {
     id: 'advanced_age',
     label: 'Mothers aged 35 or over',
-    domain: 'Demographics',
+    domain: 'Demographics & history',
     unit: 'percent',
-    of: 'pregnancies with age recorded',
+    of: 'women with age recorded',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.advanced_maternal_age_pregnancies, h.age_recorded],
+    ratio: (h) => [h.advanced_maternal_age_pregnancies, h.age_recorded],
     why: 'Advanced maternal age raises the risk of hypertension, gestational diabetes and stillbirth.',
     basis: 'Shown for context.',
   },
   {
     id: 'unintended',
     label: 'Unintended pregnancies',
-    domain: 'Demographics',
+    domain: 'Demographics & history',
     unit: 'percent',
-    of: 'pregnancies with intent recorded',
+    of: 'women asked whether the pregnancy was wanted',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.unintended_pregnancies, h.intent_recorded],
+    ratio: (h) => [h.unintended_pregnancies, h.intent_recorded],
     why: 'Guides where family planning services are most needed.',
     basis: 'Shown for context.',
   },
   {
     id: 'consanguinity',
     label: 'Consanguineous marriages',
-    domain: 'Demographics',
+    domain: 'Demographics & history',
     unit: 'percent',
-    of: 'pregnancies with consanguinity recorded',
+    of: 'women with consanguinity recorded',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.consanguineous_marriages, h.consanguinity_recorded],
+    ratio: (h) => [h.consanguineous_marriages, h.consanguinity_recorded],
     why: 'Raises the risk of recessive genetic conditions; guides genetic counselling.',
     basis: 'Shown for context.',
   },
   {
-    id: 'vulnerable',
-    label: 'Socioeconomically vulnerable',
-    domain: 'Demographics',
+    id: 'family_hypertension',
+    label: 'Family history of hypertension',
+    domain: 'Demographics & history',
     unit: 'percent',
-    of: 'pregnancies with education or profession recorded',
+    of: 'women with family history recorded',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.socioeconomically_vulnerable, h.socioeconomic_recorded],
-    why: 'Low literacy and unstable household income predict missed visits and late care.',
-    basis: 'Score of 2 or more, defined in analytics.v_pregnancy_analytics.',
+    ratio: (h) => [h.family_hypertension, h.family_hypertension_recorded],
+    why: 'A family history raises the risk of hypertension and pre-eclampsia in pregnancy.',
+    basis: 'Shown for context.',
+  },
+  {
+    id: 'family_diabetes',
+    label: 'Family history of diabetes',
+    domain: 'Demographics & history',
+    unit: 'percent',
+    of: 'women with family history recorded',
+    rule: { kind: 'context' },
+    ratio: (h) => [h.family_diabetes, h.family_diabetes_recorded],
+    why: 'A family history raises the risk of gestational diabetes.',
+    basis: 'Shown for context.',
+  },
+  {
+    id: 'prior_cesarean',
+    label: 'Previous caesarean',
+    domain: 'Demographics & history',
+    unit: 'percent',
+    of: 'women with obstetric history recorded',
+    rule: { kind: 'context' },
+    ratio: (h) => [h.prior_cesarean, h.prior_cesarean_recorded],
+    why: 'A scarred uterus needs a facility that can perform a repeat caesarean.',
+    basis: 'Shown for context.',
+  },
+  {
+    id: 'prior_iufd',
+    label: 'Previous stillbirth',
+    domain: 'Demographics & history',
+    unit: 'percent',
+    of: 'women with obstetric history recorded',
+    rule: { kind: 'context' },
+    ratio: (h) => [h.prior_iufd, h.prior_iufd_recorded],
+    why: 'A previous intrauterine fetal death raises the risk of losing this pregnancy too.',
+    basis: 'Shown for context.',
   },
 
   // Maternal health
@@ -101,7 +129,7 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'women with blood pressure recorded',
     rule: { kind: 'above', concern: 0.1, severe: 0.15 },
-    ratio: ({ health: h }) => [h.hypertension, h.bp_recorded],
+    ratio: (h) => [h.hypertension, h.bp_recorded],
     why: 'High blood pressure in pregnancy is a leading cause of maternal death, mainly through pre-eclampsia and eclampsia.',
     basis: 'Hypertensive disorders affect about 5–10% of pregnancies worldwide.',
   },
@@ -112,7 +140,7 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'women with blood pressure recorded',
     rule: { kind: 'above', concern: 0.05, severe: 0.08 },
-    ratio: ({ health: h }) => [h.preeclampsia_signs, h.bp_recorded],
+    ratio: (h) => [h.preeclampsia_signs, h.bp_recorded],
     why: 'Raised blood pressure with protein in the urine needs magnesium sulfate and a planned, timely delivery.',
     basis: 'Pre-eclampsia affects about 2–8% of pregnancies.',
   },
@@ -123,7 +151,7 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'women with haemoglobin recorded',
     rule: { kind: 'above', concern: 0.2, severe: 0.4 },
-    ratio: ({ health: h }) => [h.moderate_or_severe_anemia, h.hemoglobin_recorded],
+    ratio: (h) => [h.moderate_or_severe_anemia, h.hemoglobin_recorded],
     why: 'Anaemia raises the risk of death from postpartum haemorrhage and of preterm and low birth weight babies.',
     basis: "Adapted from WHO's 20% and 40% cut-offs for anaemia as a moderate or severe public health problem.",
   },
@@ -134,7 +162,7 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'women with haemoglobin recorded',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.severe_anemia, h.hemoglobin_recorded],
+    ratio: (h) => [h.severe_anemia, h.hemoglobin_recorded],
     why: 'Severe anaemia usually needs transfusion capacity close to where the woman gives birth.',
     basis: 'Shown for context.',
   },
@@ -143,9 +171,9 @@ export const INDICATORS: IndicatorDef[] = [
     label: 'Gestational diabetes',
     domain: 'Maternal health',
     unit: 'percent',
-    of: 'women screened',
+    of: 'women with a result recorded',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.gestational_diabetes, h.gdm_recorded],
+    ratio: (h) => [h.gestational_diabetes, h.gdm_recorded],
     why: 'Raises the risk of large babies, obstructed labour and later type 2 diabetes.',
     basis: 'Shown for context.',
   },
@@ -156,7 +184,7 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'women tested',
     rule: { kind: 'above', concern: 0.01, severe: 0.05 },
-    ratio: ({ health: h }) => [h.hiv_positive, h.hiv_tested],
+    ratio: (h) => [h.hiv_positive, h.hiv_tested],
     why: 'Positive mothers need antiretroviral therapy to prevent transmission to the baby.',
     basis: "Above 1% is UNAIDS' threshold for a generalised epidemic.",
   },
@@ -167,7 +195,7 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'women tested',
     rule: { kind: 'above', concern: 0.01, severe: 0.03 },
-    ratio: ({ health: h }) => [h.syphilis_positive, h.syphilis_tested],
+    ratio: (h) => [h.syphilis_positive, h.syphilis_tested],
     why: 'Untreated syphilis causes stillbirth and congenital syphilis; one dose of penicillin prevents it.',
     basis: 'Programme default.',
   },
@@ -178,7 +206,7 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'women tested',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.hepatitis_c_positive, h.hepatitis_c_tested],
+    ratio: (h) => [h.hepatitis_c_positive, h.hepatitis_c_tested],
     why: 'Guides follow-up testing of exposed infants.',
     basis: 'Shown for context.',
   },
@@ -189,9 +217,9 @@ export const INDICATORS: IndicatorDef[] = [
     label: 'Preterm births',
     domain: 'Newborn outcomes',
     unit: 'percent',
-    of: 'deliveries',
+    of: 'deliveries with gestational age or term recorded',
     rule: { kind: 'above', concern: 0.1, severe: 0.15 },
-    ratio: ({ health: h }) => [h.preterm_deliveries, h.deliveries],
+    ratio: (h) => [h.preterm_births, h.preterm_recorded],
     why: 'Prematurity is the leading cause of newborn death; preterm babies need warmth, feeding support and often referral.',
     basis: 'About 1 in 10 babies worldwide is born before 37 weeks.',
   },
@@ -200,44 +228,33 @@ export const INDICATORS: IndicatorDef[] = [
     label: 'Low birth weight',
     domain: 'Newborn outcomes',
     unit: 'percent',
-    of: 'live births weighed',
+    of: 'babies weighed',
     rule: { kind: 'above', concern: 0.15, severe: 0.2 },
-    ratio: ({ health: h }) => [h.low_birth_weight, h.live_births_weighed],
+    ratio: (h) => [h.low_birth_weight, h.birth_weight_recorded],
     why: 'Babies under 2,500 g reflect maternal undernutrition, infection and growth restriction, and die more often.',
     basis: 'Global prevalence is about 15%.',
   },
   {
-    id: 'sga',
-    label: 'Small for gestational age',
+    id: 'vlbw',
+    label: 'Very low birth weight',
     domain: 'Newborn outcomes',
     unit: 'percent',
-    of: 'live births with weight, sex and gestational age',
+    of: 'babies weighed',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.small_for_gestational_age, h.sga_assessable],
-    why: 'Below the 10th INTERGROWTH-21st centile: the usual proxy for growth restriction in the womb.',
+    ratio: (h) => [h.very_low_birth_weight, h.birth_weight_recorded],
+    why: 'Babies under 1,500 g almost always need care beyond a health post.',
     basis: 'Shown for context.',
   },
   {
-    id: 'stillbirth',
-    label: 'Stillbirth rate',
-    domain: 'Newborn outcomes',
-    unit: 'per1000',
-    of: 'births',
-    rule: { kind: 'above', concern: 0.012, severe: 0.025 },
-    ratio: ({ health: h }) => [h.stillbirths, h.newborns],
-    why: 'Stillbirths point to gaps in monitoring during labour and in emergency obstetric care.',
-    basis: 'Every Newborn Action Plan target: 12 or fewer per 1,000 births by 2030.',
-  },
-  {
     id: 'breastfeeding',
-    label: 'Breastfed within 1 hour',
+    label: 'Breastfeeding started',
     domain: 'Newborn outcomes',
     unit: 'percent',
-    of: 'live births with feeding recorded',
+    of: 'births with feeding recorded',
     rule: { kind: 'below', concern: 0.5, severe: 0.3 },
-    ratio: ({ health: h }) => [h.breastfed_within_1h, h.breastfeeding_recorded],
+    ratio: (h) => [h.breastfeeding_initiated, h.breastfeeding_recorded],
     why: 'Early breastfeeding cuts newborn infection and death; low rates suggest gaps in care right after birth.',
-    basis: 'The global average is under 50%; WHO targets 70% by 2030.',
+    basis: 'Programme default. WHO targets 70% starting within the first hour by 2030.',
   },
 
   // Care & referral
@@ -246,9 +263,9 @@ export const INDICATORS: IndicatorDef[] = [
     label: 'Enrolled in first trimester',
     domain: 'Care & referral',
     unit: 'percent',
-    of: 'pregnancies with gestational age at enrolment',
+    of: 'women with gestational age at enrolment',
     rule: { kind: 'below', concern: 0.5, severe: 0.3 },
-    ratio: ({ health: h }) => [h.enrolled_first_trimester, h.enrollment_ga_recorded],
+    ratio: (h) => [h.enrolled_first_trimester, h.enrollment_ga_recorded],
     why: 'A late first visit leaves less time to screen and treat anaemia, hypertension and infections.',
     basis: 'WHO recommends the first antenatal contact before 12 weeks; flag levels are programme defaults.',
   },
@@ -257,9 +274,9 @@ export const INDICATORS: IndicatorDef[] = [
     label: 'Caesarean births',
     domain: 'Care & referral',
     unit: 'percent',
-    of: 'deliveries',
+    of: 'deliveries with the type recorded',
     rule: { kind: 'outside', low: 0.05, high: 0.15, severeLow: 0.02, severeHigh: 0.25 },
-    ratio: ({ health: h }) => [h.cesarean_deliveries, h.deliveries],
+    ratio: (h) => [h.cesareans, h.delivery_type_recorded],
     why: 'Below 5% suggests women cannot reach surgery when they need it; well above 15% suggests surgery without medical need.',
     basis: 'WHO statement on caesarean section rates (2015).',
   },
@@ -270,19 +287,19 @@ export const INDICATORS: IndicatorDef[] = [
     unit: 'percent',
     of: 'deliveries with no previous caesarean',
     rule: { kind: 'context' },
-    ratio: ({ health: h }) => [h.primary_cesareans, h.deliveries_without_prior_cesarean],
+    ratio: (h) => [h.primary_cesareans, h.deliveries_without_prior_cesarean],
     why: 'First caesareans drive future repeat caesareans; track against the overall rate.',
     basis: 'Shown for context.',
   },
   {
     id: 'referral',
-    label: 'Births referred to higher care',
+    label: 'Referred to higher care',
     domain: 'Care & referral',
     unit: 'percent',
-    of: 'deliveries at or near facilities in the region',
+    of: 'births with postpartum care recorded',
     rule: { kind: 'above', concern: 0.15, severe: 0.25 },
-    ratio: ({ delivery: d }) => [d.deliveries_with_any_referral, d.deliveries],
-    why: 'Frequent referral of mother or baby points to facilities without emergency obstetric capability.',
+    ratio: (h) => [h.referred_to_higher_care, h.referral_recorded],
+    why: 'Frequent referral after birth points to clinics without the equipment or skills for emergency obstetric care.',
     basis: 'Programme default.',
   },
 ];
@@ -304,7 +321,7 @@ export interface IndicatorResult {
   excess: number;
 }
 
-export function evaluateIndicator(def: IndicatorDef, counts: CountsBundle): IndicatorResult {
+export function evaluateIndicator(def: IndicatorDef, counts: HealthCounts): IndicatorResult {
   const [numerator, denominator] = def.ratio(counts);
   const rate = denominator > 0 ? numerator / denominator : null;
   const base = { def, numerator, denominator, rate, excess: 0 };
@@ -347,7 +364,7 @@ export interface Assessment {
   flagged: IndicatorResult[];
 }
 
-export function assess(counts: CountsBundle): Assessment {
+export function assess(counts: HealthCounts): Assessment {
   const results = INDICATORS.map((def) => evaluateIndicator(def, counts));
   const severe = results.filter((r) => r.status === 'severe');
   const concern = results.filter((r) => r.status === 'concern');

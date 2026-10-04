@@ -1,117 +1,111 @@
 import { assess, type Assessment } from './concern';
 import {
-  DELIVERY_COUNT_KEYS,
   HEALTH_COUNT_KEYS,
   type DashboardData,
-  type DeliveryCounts,
-  type FacilityDeliveryRow,
-  type FacilityHealthRow,
   type HealthCounts,
+  type LocationEntry,
+  type MidwifeHealthRow,
   type MidwifeMonthRow,
   type RegionGeo,
+  type SocioeconomicAttribute,
 } from './types';
 
-// The views hold counts with their denominators, so regions are built by summing
-// facility rows; rates are only computed after summing.
+// The workflow returns counts per midwife. Regions are built by summing those counts
+// for the midwives listed under each region in locations.json; rates are only
+// computed after summing.
 
 export const emptyHealth = (): HealthCounts =>
   Object.fromEntries(HEALTH_COUNT_KEYS.map((k) => [k, 0])) as HealthCounts;
-
-export const emptyDelivery = (): DeliveryCounts =>
-  Object.fromEntries(DELIVERY_COUNT_KEYS.map((k) => [k, 0])) as DeliveryCounts;
 
 export function addHealth(into: HealthCounts, row: HealthCounts): HealthCounts {
   for (const k of HEALTH_COUNT_KEYS) into[k] += Number(row[k]) || 0;
   return into;
 }
 
-export function addDelivery(into: DeliveryCounts, row: DeliveryCounts): DeliveryCounts {
-  for (const k of DELIVERY_COUNT_KEYS) into[k] += Number(row[k]) || 0;
-  return into;
-}
-
 export interface MonthPoint {
   month: string;
-  pregnancies_enrolled: number;
-  deliveries_recorded: number;
+  patients_registered: number;
   documents_captured: number;
-  documents_verified: number;
-  sync_failures: number;
 }
 
 export interface OperationsTotals {
   documents_captured: number;
   documents_verified: number;
-  documents_open: number;
+  documents_waiting: number;
   documents_sync_failed: number;
-  sync_failures: number;
+  documents_processing_failed: number;
+  patients_registered: number;
 }
 
-const emptyOperations = (): OperationsTotals => ({
+export const emptyOperations = (): OperationsTotals => ({
   documents_captured: 0,
   documents_verified: 0,
-  documents_open: 0,
+  documents_waiting: 0,
   documents_sync_failed: 0,
-  sync_failures: 0,
+  documents_processing_failed: 0,
+  patients_registered: 0,
 });
 
-export function addOperations(into: OperationsTotals, row: MidwifeMonthRow): OperationsTotals {
-  into.documents_captured += Number(row.documents_captured) || 0;
-  into.documents_verified += Number(row.documents_verified) || 0;
-  into.documents_open += Number(row.documents_open) || 0;
-  into.documents_sync_failed += Number(row.documents_sync_failed) || 0;
-  into.sync_failures += Number(row.sync_failures) || 0;
+export function addOperations(into: OperationsTotals, row: MidwifeMonthRow | OperationsTotals): OperationsTotals {
+  for (const k of Object.keys(into) as (keyof OperationsTotals)[]) into[k] += Number(row[k]) || 0;
   return into;
 }
 
 export function monthlySeries(rows: MidwifeMonthRow[]): MonthPoint[] {
   const byMonth = new Map<string, MonthPoint>();
   for (const r of rows) {
-    const month = r.report_month.slice(0, 10);
-    const p = byMonth.get(month) ?? {
-      month,
-      pregnancies_enrolled: 0,
-      deliveries_recorded: 0,
-      documents_captured: 0,
-      documents_verified: 0,
-      sync_failures: 0,
-    };
-    p.pregnancies_enrolled += Number(r.pregnancies_enrolled) || 0;
-    p.deliveries_recorded += Number(r.deliveries_recorded) || 0;
+    const month = r.month.slice(0, 10);
+    const p = byMonth.get(month) ?? { month, patients_registered: 0, documents_captured: 0 };
+    p.patients_registered += Number(r.patients_registered) || 0;
     p.documents_captured += Number(r.documents_captured) || 0;
-    p.documents_verified += Number(r.documents_verified) || 0;
-    p.sync_failures += Number(r.sync_failures) || 0;
     byMonth.set(month, p);
   }
   return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
+export type SocioeconomicProfile = Record<SocioeconomicAttribute, { value: string; patients: number }[]>;
+
 export interface RegionSummary {
   region: string;
   geo: RegionGeo | null;
-  facilities: FacilityHealthRow[];
+  midwives: MidwifeHealthRow[];
   health: HealthCounts;
-  deliveryRows: FacilityDeliveryRow[];
-  delivery: DeliveryCounts;
+  socioeconomic: SocioeconomicProfile;
   midwifeRows: MidwifeMonthRow[];
   monthly: MonthPoint[];
   operations: OperationsTotals;
-  midwifeCount: number;
   assessment: Assessment;
 }
 
 export interface NationalTotals {
   health: HealthCounts;
-  delivery: DeliveryCounts;
   operations: OperationsTotals;
-  facilityCount: number;
+  midwifeCount: number;
 }
 
-function groupBy<T>(rows: T[], key: (row: T) => string | null): Map<string, T[]> {
+const normalizeCode = (code: string) => code.trim().toLowerCase();
+
+/** Finds the region for a midwife code. Midwives missing from locations.json form their own area. */
+export function makeRegionLookup(locations: LocationEntry[]) {
+  const byCode = new Map<string, LocationEntry>();
+  for (const loc of locations) for (const code of loc.midwives) byCode.set(normalizeCode(String(code)), loc);
+
+  return (code: string): { region: string; geo: RegionGeo | null } => {
+    const loc = byCode.get(normalizeCode(code));
+    if (loc) {
+      return {
+        region: loc.region,
+        geo: { region: loc.region, country_name: loc.country, latitude: loc.latitude, longitude: loc.longitude },
+      };
+    }
+    return { region: code === 'Unassigned' ? 'No midwife code' : `Midwife ${code}`, geo: null };
+  };
+}
+
+function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   const groups = new Map<string, T[]>();
   for (const row of rows) {
     const k = key(row);
-    if (k === null) continue;
     const list = groups.get(k);
     if (list) list.push(row);
     else groups.set(k, [row]);
@@ -120,48 +114,44 @@ function groupBy<T>(rows: T[], key: (row: T) => string | null): Map<string, T[]>
 }
 
 export function buildRegionSummaries(data: DashboardData): RegionSummary[] {
-  const geoByRegion = new Map(data.regions.map((g) => [g.region, g]));
-  const healthByRegion = groupBy(data.facilityHealth, (r) => r.region);
-  const deliveryByRegion = groupBy(data.facilityDeliveries, (r) => r.region);
-  const midwifeByRegion = groupBy(data.midwifeMonths, (r) => r.region);
-  const regionNames = new Set([...healthByRegion.keys(), ...deliveryByRegion.keys()]);
+  const lookup = makeRegionLookup(data.locations);
+  const healthByRegion = groupBy(data.midwifeHealth, (r) => lookup(r.midwife_code).region);
+  const socioByRegion = groupBy(data.socioeconomic, (r) => lookup(r.midwife_code).region);
+  const monthsByRegion = groupBy(data.midwifeMonths, (r) => lookup(r.midwife_id).region);
 
-  return [...regionNames].map((region) => {
-    const facilities = healthByRegion.get(region) ?? [];
-    const deliveryRows = deliveryByRegion.get(region) ?? [];
-    const midwifeRows = midwifeByRegion.get(region) ?? [];
-    const health = facilities.reduce(addHealth, emptyHealth());
-    const delivery = deliveryRows.reduce(addDelivery, emptyDelivery());
-    const geo = geoByRegion.get(region);
+  return [...healthByRegion.entries()].map(([region, midwives]) => {
+    const health = midwives.reduce(addHealth, emptyHealth());
+    const midwifeRows = monthsByRegion.get(region) ?? [];
+
+    const socioeconomic: SocioeconomicProfile = { education_level: [], profession: [], husband_profession: [] };
+    for (const [attribute, rows] of groupBy(socioByRegion.get(region) ?? [], (r) => r.attribute)) {
+      const totals = new Map<string, number>();
+      for (const r of rows) totals.set(r.value, (totals.get(r.value) ?? 0) + (Number(r.patients) || 0));
+      if (attribute in socioeconomic) {
+        socioeconomic[attribute as SocioeconomicAttribute] = [...totals.entries()]
+          .map(([value, patients]) => ({ value, patients }))
+          .sort((a, b) => b.patients - a.patients);
+      }
+    }
+
     return {
       region,
-      geo: geo
-        ? { ...geo, latitude: Number(geo.latitude), longitude: Number(geo.longitude) }
-        : null,
-      facilities,
+      geo: lookup(midwives[0].midwife_code).geo,
+      midwives,
       health,
-      deliveryRows,
-      delivery,
+      socioeconomic,
       midwifeRows,
       monthly: monthlySeries(midwifeRows),
       operations: midwifeRows.reduce(addOperations, emptyOperations()),
-      midwifeCount: new Set(midwifeRows.map((r) => r.midwife_id)).size,
-      assessment: assess({ health, delivery }),
+      assessment: assess(health),
     };
   });
 }
 
-export function buildNationalTotals(summaries: RegionSummary[]): NationalTotals {
+export function buildNationalTotals(data: DashboardData, summaries: RegionSummary[]): NationalTotals {
   return {
     health: summaries.reduce((acc, s) => addHealth(acc, s.health), emptyHealth()),
-    delivery: summaries.reduce((acc, s) => addDelivery(acc, s.delivery), emptyDelivery()),
-    operations: summaries.reduce(
-      (acc, s) => {
-        for (const k of Object.keys(acc) as (keyof OperationsTotals)[]) acc[k] += s.operations[k];
-        return acc;
-      },
-      emptyOperations(),
-    ),
-    facilityCount: summaries.reduce((n, s) => n + s.facilities.length, 0),
+    operations: data.midwifeMonths.reduce(addOperations, emptyOperations()),
+    midwifeCount: data.midwifeHealth.length,
   };
 }

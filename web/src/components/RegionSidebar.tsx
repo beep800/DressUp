@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { NationalTotals, RegionSummary } from '../lib/aggregate';
 import { HEADLINE_IDS, LEVEL_RANK, type IndicatorResult } from '../lib/concern';
-import { fmtCompact, fmtInt, regionPath } from '../lib/format';
+import { fmtCompact, fmtInt, fmtPct, ratio, regionPath } from '../lib/format';
 import { ConcernBadge } from './Badges';
 import { IconArrowRight } from './Icons';
 import { IndicatorBar, scaleMaxFor } from './IndicatorBar';
@@ -60,8 +60,8 @@ export function RegionSidebar({
     <aside className="sidebar" aria-label="Regional statistics">
       {demo && (
         <p className="note">
-          These are generated demo numbers, not census figures. Point <code>.env</code> at your n8n workflow or
-          Supabase project to see your data.
+          These are generated demo numbers, not census figures. Set <code>VITE_DATA_URL</code> in{' '}
+          <code>.env</code> to load your data through n8n.
         </p>
       )}
       <div className="kpi-grid">
@@ -75,9 +75,17 @@ export function RegionSidebar({
           }
           note={`${highCount} high concern`}
         />
-        <StatTile label="Pregnancies registered" value={fmtCompact(national.health.pregnancies)} note={`${fmtInt(national.facilityCount)} facilities`} />
+        <StatTile
+          label="Women registered"
+          value={fmtCompact(national.health.pregnancies)}
+          note={`${fmtInt(national.midwifeCount)} midwives`}
+        />
         <StatTile label="Deliveries recorded" value={fmtCompact(national.health.deliveries)} />
-        <StatTile label="Live births" value={fmtCompact(national.health.live_births)} note={`${fmtInt(national.health.stillbirths)} stillbirths`} />
+        <StatTile
+          label="Referred to higher care"
+          value={fmtPct(ratio(national.health.referred_to_higher_care, national.health.referral_recorded))}
+          note={`${fmtInt(national.health.referred_to_higher_care)} births`}
+        />
       </div>
 
       <div className="list-controls">
@@ -93,7 +101,7 @@ export function RegionSidebar({
           <span className="sr-only">Sort regions by</span>
           <select id="region-sort" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
             <option value="concern">Most concerning first</option>
-            <option value="pregnancies">Most pregnancies first</option>
+            <option value="pregnancies">Most women first</option>
             <option value="name">Name A–Z</option>
           </select>
         </label>
@@ -119,8 +127,9 @@ export function RegionSidebar({
 
       {unmapped.length > 0 && (
         <p className="note">
-          {unmapped.length} region{unmapped.length > 1 ? 's are' : ' is'} not on the map yet:{' '}
-          {unmapped.map((s) => s.region).join(', ')}. Add a location in <code>analytics.ref_region</code>.
+          {unmapped.length} {unmapped.length > 1 ? 'areas are' : 'area is'} not on the map yet:{' '}
+          {unmapped.map((s) => s.region).join(', ')}. Add the midwife codes to a region in{' '}
+          <code>web/public/locations.json</code>.
         </p>
       )}
     </aside>
@@ -173,7 +182,7 @@ function RegionCard({
       </button>
       <div className="region-card-foot">
         <span>
-          {flagText} · {fmtInt(summary.health.pregnancies)} pregnancies
+          {flagText} · {fmtInt(summary.health.pregnancies)} women
         </span>
         <Link to={regionPath(summary.region)} className="text-link">
           Details <IconArrowRight />

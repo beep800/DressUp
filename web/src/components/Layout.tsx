@@ -1,28 +1,9 @@
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useDashboard } from '../data/DataContext';
-import { DATA_MODE } from '../lib/api';
-import { useAuth } from './AuthGate';
-
-const ERROR_HINTS = {
-  endpoint: (
-    <>
-      Check that n8n is running, that the Maternal Health Atlas workflow is active, and that its Postgres credential
-      can reach Supabase. The workflow's Executions tab shows the error from the last request.
-    </>
-  ),
-  supabase: (
-    <>
-      Check that the <code>analytics</code> schema is listed under Exposed schemas in the Supabase API settings, that{' '}
-      <code>sql/002_dashboard_access.sql</code> has been run, and that the materialized views have been refreshed.
-    </>
-  ),
-  demo: null,
-};
 
 export function Layout({ children }: { children: ReactNode }) {
   const { status, error, data, reload } = useDashboard();
-  const { email, signOut } = useAuth();
 
   return (
     <div className="app">
@@ -39,7 +20,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
         <div className="topbar-end">
           {data?.source === 'demo' && (
-            <span className="source-chip" title="Generated sample data. Point .env at your n8n workflow or Supabase project to load the census.">
+            <span className="source-chip" title="Generated sample data. Set VITE_DATA_URL in .env to load the census through n8n.">
               Demo data
             </span>
           )}
@@ -47,12 +28,6 @@ export function Layout({ children }: { children: ReactNode }) {
             <span className="source-chip source-live">
               Updated {data.loadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
-          )}
-          {email && <span className="user-email">{email}</span>}
-          {signOut && (
-            <button className="btn btn-quiet" type="button" onClick={signOut}>
-              Sign out
-            </button>
           )}
         </div>
       </header>
@@ -68,7 +43,11 @@ export function Layout({ children }: { children: ReactNode }) {
             <div className="panel error-panel" role="alert">
               <h2>The dashboard could not load its data</h2>
               <p>{error}</p>
-              {ERROR_HINTS[DATA_MODE] && <p className="muted">{ERROR_HINTS[DATA_MODE]}</p>}
+              <p className="muted">
+                Check that n8n is running, that the Maternal Health Atlas workflow is active, and that its Postgres
+                credential can reach your database. The workflow's Executions tab in n8n shows the error from the last
+                request.
+              </p>
               <button className="btn btn-primary" type="button" onClick={reload}>
                 Try again
               </button>
