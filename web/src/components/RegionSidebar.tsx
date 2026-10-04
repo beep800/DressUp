@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { NationalTotals, RegionSummary } from '../lib/aggregate';
+import { UNKNOWN_AREA, type NationalTotals, type RegionSummary } from '../lib/aggregate';
+import type { GeocodingStatus } from '../lib/types';
 import { HEADLINE_IDS, LEVEL_RANK, type IndicatorResult } from '../lib/concern';
 import { fmtCompact, fmtInt, fmtPct, ratio, regionPath } from '../lib/format';
 import { ConcernBadge } from './Badges';
@@ -13,25 +14,50 @@ type Sort = 'concern' | 'pregnancies' | 'name';
 
 const headline = (s: RegionSummary, id: string) => s.assessment.results.find((r) => r.def.id === id)!;
 
+const plural = (n: number, one: string, many: string) => `${fmtInt(n)} ${n === 1 ? one : many}`;
+
+/** Explains why some women are not on the map yet. */
+function locationNotes(national: NationalTotals, geocoding: GeocodingStatus | null): string[] {
+  if (!geocoding) return [];
+  const notes: string[] = [];
+  const noAddress = national.health.pregnancies - geocoding.with_address;
+  if (geocoding.pending > 0) {
+    notes.push(
+      `${plural(geocoding.pending, 'address is', 'addresses are')} still being placed on the map, a few on each load. Reload the page in a minute to place more.`,
+    );
+  }
+  if (geocoding.not_found > 0) {
+    notes.push(
+      `${plural(geocoding.not_found, 'address', 'addresses')} could not be found on the map. Those women are counted under “${UNKNOWN_AREA}”.`,
+    );
+  }
+  if (noAddress > 0) {
+    notes.push(`${plural(noAddress, 'woman has', 'women have')} no address recorded and ${noAddress === 1 ? 'is' : 'are'} counted under “${UNKNOWN_AREA}”.`);
+  }
+  return notes;
+}
+
 export function RegionSidebar({
   summaries,
   national,
   selected,
   onSelect,
   demo,
+  geocoding,
 }: {
   summaries: RegionSummary[];
   national: NationalTotals;
   selected: string | null;
   onSelect: (region: string) => void;
   demo: boolean;
+  geocoding: GeocodingStatus | null;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('concern');
 
   const flaggedCount = summaries.filter((s) => s.assessment.level === 'high' || s.assessment.level === 'elevated').length;
   const highCount = summaries.filter((s) => s.assessment.level === 'high').length;
-  const unmapped = summaries.filter((s) => !s.geo);
+  const mapNotes = locationNotes(national, geocoding);
 
   // One scale per headline indicator, shared by every card, so bars compare across regions.
   const scales = useMemo(() => {
@@ -46,6 +72,9 @@ export function RegionSidebar({
         ? summaries.filter((s) => s.assessment.level === 'high' || s.assessment.level === 'elevated')
         : summaries;
     return [...shown].sort((a, b) => {
+      // Women who could not be placed always come last.
+      const unknown = Number(a.region === UNKNOWN_AREA) - Number(b.region === UNKNOWN_AREA);
+      if (unknown !== 0) return unknown;
       if (sort === 'name') return a.region.localeCompare(b.region);
       if (sort === 'pregnancies') return b.health.pregnancies - a.health.pregnancies;
       return (
@@ -84,7 +113,7 @@ export function RegionSidebar({
         <StatTile
           label="Referred to higher care"
           value={fmtPct(ratio(national.health.referred_to_higher_care, national.health.referral_recorded))}
-          note={`${fmtInt(national.health.referred_to_higher_care)} births`}
+          note={plural(national.health.referred_to_higher_care, 'birth', 'births')}
         />
       </div>
 
@@ -125,12 +154,12 @@ export function RegionSidebar({
         </ul>
       )}
 
-      {unmapped.length > 0 && (
-        <p className="note">
-          {unmapped.length} {unmapped.length > 1 ? 'areas are' : 'area is'} not on the map yet:{' '}
-          {unmapped.map((s) => s.region).join(', ')}. Add the midwife codes to a region in{' '}
-          <code>web/public/locations.json</code>.
-        </p>
+      {mapNotes.length > 0 && (
+        <div className="note">
+          {mapNotes.map((text) => (
+            <p key={text}>{text}</p>
+          ))}
+        </div>
       )}
     </aside>
   );
@@ -182,7 +211,7 @@ function RegionCard({
       </button>
       <div className="region-card-foot">
         <span>
-          {flagText} · {fmtInt(summary.health.pregnancies)} women
+          {flagText} · {plural(summary.health.pregnancies, 'woman', 'women')}
         </span>
         <Link to={regionPath(summary.region)} className="text-link">
           Details <IconArrowRight />

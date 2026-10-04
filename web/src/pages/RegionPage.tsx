@@ -153,7 +153,7 @@ export function RegionPage() {
         <div className="panel">
           <h1>Region not found</h1>
           <p className="muted">
-            Nothing is recorded for “{regionName}”. It may have been renamed in <code>locations.json</code>.
+            Nothing is recorded for “{regionName}”. Its women may now be counted under a different area.
           </p>
         </div>
       </div>
@@ -175,7 +175,7 @@ export function RegionPage() {
 
       <header className="region-header">
         <div>
-          <p className="eyebrow">{summary.geo?.country_name ?? 'Not on the map yet'}</p>
+          <p className="eyebrow">{summary.geo?.country_name || 'Not on the map'}</p>
           <h1>{summary.region}</h1>
           <p className="muted">
             {fmtInt(summary.midwives.length)} {summary.midwives.length === 1 ? 'midwife' : 'midwives'} ·{' '}

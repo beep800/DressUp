@@ -75,25 +75,30 @@ export const HEALTH_COUNT_KEYS = [
 export type HealthCountKey = (typeof HEALTH_COUNT_KEYS)[number];
 export type HealthCounts = Record<HealthCountKey, number>;
 
-/** Counts for the women registered by one midwife (patient_identification.midwife_code). */
+/**
+ * Counts for the women one midwife (patient_identification.midwife_code) registered in
+ * one area. area_id is null for women whose address is missing or could not be placed.
+ */
 export interface MidwifeHealthRow extends HealthCounts {
+  area_id: number | null;
   midwife_code: string;
   median_enrollment_ga_weeks: number | null;
 }
 
 export type SocioeconomicAttribute = 'education_level' | 'profession' | 'husband_profession';
 
-/** How many of a midwife's patients gave each answer (lower-cased, trimmed). */
+/** How many women in an area gave each answer (lower-cased, trimmed). */
 export interface SocioeconomicRow {
-  midwife_code: string;
+  area_id: number | null;
   attribute: SocioeconomicAttribute;
   value: string;
   patients: number;
 }
 
-/** document_submissions per midwife_id and month. */
+/** document_submissions per midwife_id, area of the woman they belong to, and month. */
 export interface MidwifeMonthRow {
   midwife_id: string;
+  area_id: number | null;
   month: string;
   documents_captured: number;
   documents_verified: number;
@@ -127,13 +132,24 @@ export interface DocumentDayRow {
   field_confidence_n: number;
 }
 
-/** One entry of web/public/locations.json: which midwives work in a region, and where it is. */
-export interface LocationEntry {
-  region: string;
+/** A place women live in, worked out from their addresses by the n8n workflow. */
+export interface AreaRow {
+  area_id: number;
+  name: string;
+  state: string;
   country: string;
+  /** Average of the women's locations, rounded to about 10 km. */
   latitude: number;
   longitude: number;
-  midwives: string[];
+}
+
+/** How many addresses the workflow has placed on the map so far. */
+export interface GeocodingStatus {
+  with_address: number;
+  placed: number;
+  /** Not looked up yet; a few are looked up on each page load. */
+  pending: number;
+  not_found: number;
 }
 
 export interface RegionGeo {
@@ -146,7 +162,8 @@ export interface RegionGeo {
 export interface DashboardData {
   source: 'n8n' | 'demo';
   loadedAt: Date;
-  locations: LocationEntry[];
+  areas: AreaRow[];
+  geocoding: GeocodingStatus | null;
   midwifeHealth: MidwifeHealthRow[];
   socioeconomic: SocioeconomicRow[];
   midwifeMonths: MidwifeMonthRow[];

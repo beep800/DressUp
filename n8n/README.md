@@ -6,9 +6,19 @@ Census database ──► n8n workflow ──► https://<your-name>.app.n8n.clo
 Browser ──► http://localhost:5173 (Vite) ── /n8n/… proxy, adds the key
 ```
 
-The workflow runs one read-only query, `dashboard_query.sql`, against the tables you
-already have. It returns totals per midwife, never individual patient rows. Nothing
-is created or changed in the database. Everything is computed live on each page load.
+The workflow reads the tables you already have and never writes to them:
+
+1. **Read addresses** reads each woman's `address`.
+2. **Geocode addresses** (`geocode_addresses.js`) turns each address into a town on the
+   map, using OpenStreetMap's geocoder. Each address is looked up once and remembered.
+3. **Read census tables** (`dashboard_query.sql`) counts, for each town and midwife,
+   how many women have each measurement recorded and how many cross a clinical
+   threshold.
+4. The dashboard receives those counts and the towns' positions, never individual
+   patient rows or addresses.
+
+Each town becomes a region on the dashboard's map. Everything is computed live on
+each page load.
 
 The web app runs on your computer and fetches those totals through Vite's proxy. The
 proxy adds a secret key to each request. n8n refuses requests without it, which
@@ -109,40 +119,50 @@ load instead of "Demo data". Reload the page to fetch fresh numbers.
 To serve the production build instead: `npm run build && npm run preview`, then open
 http://localhost:4173. The proxy and key work there too.
 
-## 4. Optional: put regions on the map
+## 4. How addresses become map areas
 
-Skip this while you have only one or two midwives. Each midwife then appears in the
-sidebar as their own area, and every page works; only the map stays empty.
+The **Geocode addresses** node sends each address to OpenStreetMap's free geocoder
+(Nominatim) and groups women by the town it returns. Its settings are at the top of
+the node's code:
 
-Your tables link each woman to a `midwife_code` but not to a place, so regions come
-from `web/public/locations.json`. List each region with its centre point and the
-midwife codes that work there:
+| Setting | What it does |
+|---|---|
+| `CONTACT_EMAIL` | OpenStreetMap's usage policy asks for a contact address. Put yours here. |
+| `COUNTRY_CODES` | Limits matches to your countries, e.g. `'ma'`. Makes short or ambiguous addresses much more reliable. |
+| `AREA_LEVEL` | `'town'` (default), `'county'` or `'state'`: how finely women are grouped on the map. |
+| `MAX_LOOKUPS_PER_REQUEST` | New addresses looked up per page load, at one per second (default 15). |
+| `GEOCODER_URL` | Point this at your own Nominatim server to keep addresses off third-party services. |
 
-```json
-{
-  "regions": [
-    {
-      "region": "Marrakech-Safi",
-      "country": "Morocco",
-      "latitude": 31.63,
-      "longitude": -7.99,
-      "midwives": ["MW01", "MW02", "midwife_001"]
-    }
-  ]
-}
-```
+What leaves your systems, and what is kept:
 
-Include both the `patient_identification.midwife_code` and the
-`document_submissions.midwife_id` of each midwife if they differ. Codes are matched
-without regard to case. Midwives not listed appear in the sidebar as their own area,
-off the map. Edit the file and reload the page; no rebuild is needed while
-`npm run dev` is running.
+- **Sent to OpenStreetMap:** the address text only. No name, ID or health data. If
+  your data protection rules don't allow sending patient addresses to an outside
+  service, set `GEOCODER_URL` to a Nominatim server you host.
+- **Kept in n8n:** the workflow remembers each address's town, county, state, country
+  and coordinates rounded to about 1 km, keyed by a hash of the address, never the
+  address itself. Successful runs are not saved in n8n's execution history, because
+  addresses pass through them.
+- **Shown on the dashboard:** one marker per town, placed at the average of its
+  women's locations rounded to about 10 km, never anyone's home.
+
+The first page loads place addresses gradually, 15 at a time, and the sidebar says
+how many are still waiting. Addresses the geocoder can't find, and women with no
+address, are counted under "Location unknown". They are retried after a week, in case
+the address was corrected. The workflow only remembers lookups made from its live
+webhook, not from manual test runs in the n8n editor.
 
 ## While there is little data
 
 A rate is only flagged once it rests on at least 30 records (`MIN_DENOMINATOR` in
 `web/src/lib/concern.ts`). Until then regions show "Too few records" and grey map
 markers, and their counts are still shown. Flags appear as records come in.
+
+## Changing the workflow
+
+`maternal-health-atlas.workflow.json` is built from `dashboard_query.sql` and
+`geocode_addresses.js`. After editing either file, run `python3 n8n/build_workflow.py`
+and re-import the workflow. If you edit a node directly in n8n instead, copy the change
+back into the file so the two don't drift apart.
 
 ## When something fails
 
@@ -153,3 +173,5 @@ markers, and their counts are still shown. Flags appear as records come in.
 - **It answered 404:** the workflow isn't active, or the webhook path was changed.
 - **It answered 500:** open the workflow's **Executions** tab in n8n for the database error.
 - **A rate looks impossible** (a caesarean rate of 90%, say): check the codes in step 2.
+- **Everyone is under "Location unknown":** open the **Geocode addresses** node's output
+  in the Executions tab, or set `COUNTRY_CODES` so short addresses match your country.

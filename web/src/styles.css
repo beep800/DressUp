@@ -195,6 +195,12 @@ select {
   border-radius: 8px;
 }
 
+div.note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
