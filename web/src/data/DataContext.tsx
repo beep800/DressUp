@@ -39,7 +39,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       error,
       data,
       summaries,
-      national: data ? buildNationalTotals(summaries) : null,
+      national: data ? buildNationalTotals(data, summaries) : null,
       reload,
     };
   }, [data, error, reload]);

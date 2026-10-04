@@ -19,7 +19,7 @@ export function RegionPopup({
   docked: boolean;
   onClose: () => void;
 }) {
-  const { assessment: a, health, delivery } = summary;
+  const { assessment: a, health } = summary;
   const reasons = a.flagged.slice(0, MAX_REASONS);
 
   return (
@@ -61,20 +61,20 @@ export function RegionPopup({
 
       <dl className="popup-stats">
         <div>
-          <dt>Pregnancies</dt>
+          <dt>Women registered</dt>
           <dd>{fmtInt(health.pregnancies)}</dd>
         </div>
         <div>
-          <dt>Live births</dt>
-          <dd>{fmtInt(health.live_births)}</dd>
+          <dt>Deliveries</dt>
+          <dd>{fmtInt(health.deliveries)}</dd>
         </div>
         <div>
-          <dt>Facilities</dt>
-          <dd>{fmtInt(summary.facilities.length)}</dd>
+          <dt>Midwives</dt>
+          <dd>{fmtInt(summary.midwives.length)}</dd>
         </div>
         <div>
-          <dt>Births referred</dt>
-          <dd>{fmtPct(ratio(delivery.deliveries_with_any_referral, delivery.deliveries))}</dd>
+          <dt>Referred to higher care</dt>
+          <dd>{fmtPct(ratio(health.referred_to_higher_care, health.referral_recorded))}</dd>
         </div>
       </dl>
 

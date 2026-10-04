@@ -1,42 +1,37 @@
 import { generateDemoData } from './demoData';
-import { ANALYTICS_SCHEMA, supabase } from './supabase';
 import type {
   DashboardData,
-  FacilityDeliveryRow,
-  FacilityHealthRow,
+  DocumentDayRow,
+  LocationEntry,
+  MidwifeHealthRow,
   MidwifeMonthRow,
-  OcrDayRow,
-  RegionGeo,
+  SocioeconomicRow,
 } from './types';
 
-/**
- * An n8n webhook (or any endpoint) that returns every dashboard view in one JSON
- * object. When set it takes precedence over a direct Supabase connection.
- */
+/** The n8n webhook that returns the dashboard data. Without it the app runs on demo data. */
 export const DATA_URL = (import.meta.env.VITE_DATA_URL as string | undefined) || undefined;
 
-export type DataMode = 'endpoint' | 'supabase' | 'demo';
-export const DATA_MODE: DataMode = DATA_URL ? 'endpoint' : supabase ? 'supabase' : 'demo';
+export const DATA_MODE: 'n8n' | 'demo' = DATA_URL ? 'n8n' : 'demo';
 
-const PAYLOAD_KEYS = ['regions', 'facilityHealth', 'facilityDeliveries', 'midwifeMonths', 'ocrDays'] as const;
+const PAYLOAD_KEYS = ['midwifeHealth', 'socioeconomic', 'midwifeMonths', 'documentDays'] as const;
 
-async function loadFromEndpoint(url: string): Promise<DashboardData> {
+async function fetchJson(url: string, what: string): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(url, { headers: { Accept: 'application/json' } });
+    response = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
   } catch {
-    throw new Error(`Could not reach the data endpoint at ${url}.`);
+    throw new Error(`Could not reach ${what} at ${url}.`);
   }
-  if (!response.ok) {
-    throw new Error(`The data endpoint at ${url} answered ${response.status} ${response.statusText}.`);
-  }
-
-  let raw: unknown;
+  if (!response.ok) throw new Error(`${what} at ${url} answered ${response.status} ${response.statusText}.`);
   try {
-    raw = await response.json();
+    return await response.json();
   } catch {
-    throw new Error(`The data endpoint at ${url} did not return JSON.`);
+    throw new Error(`${what} at ${url} did not return JSON.`);
   }
+}
+
+async function loadFromN8n(url: string): Promise<Omit<DashboardData, 'locations'>> {
+  const raw = await fetchJson(url, 'The n8n workflow');
   // n8n may wrap the object in an array, or under the query's column name.
   const first: unknown = Array.isArray(raw) ? raw[0] : raw;
   const body = (first && typeof first === 'object' && 'payload' in first ? first.payload : first) as
@@ -44,59 +39,47 @@ async function loadFromEndpoint(url: string): Promise<DashboardData> {
     | undefined;
   const missing = PAYLOAD_KEYS.filter((key) => !Array.isArray(body?.[key]));
   if (!body || missing.length > 0) {
-    throw new Error(`The data endpoint's response is missing ${missing.join(', ')}.`);
+    throw new Error(`The n8n workflow's response is missing ${missing.join(', ')}.`);
   }
-
   return {
-    source: 'endpoint',
+    source: 'n8n',
     loadedAt: new Date(),
-    regions: body.regions as RegionGeo[],
-    facilityHealth: body.facilityHealth as FacilityHealthRow[],
-    facilityDeliveries: body.facilityDeliveries as FacilityDeliveryRow[],
+    midwifeHealth: body.midwifeHealth as MidwifeHealthRow[],
+    socioeconomic: body.socioeconomic as SocioeconomicRow[],
     midwifeMonths: body.midwifeMonths as MidwifeMonthRow[],
-    ocrDays: body.ocrDays as OcrDayRow[],
+    documentDays: body.documentDays as DocumentDayRow[],
   };
 }
 
-const PAGE_SIZE = 1000;
+const isLocation = (e: unknown): e is LocationEntry => {
+  const l = e as Partial<LocationEntry> | null;
+  return (
+    !!l &&
+    typeof l.region === 'string' &&
+    Number.isFinite(Number(l.latitude)) &&
+    Number.isFinite(Number(l.longitude)) &&
+    Array.isArray(l.midwives)
+  );
+};
 
-/**
- * Reads every row of a view. Supabase caps each response (1,000 rows by default),
- * so this pages through, advancing by however many rows actually came back.
- */
-async function fetchAll<T>(table: string, orderBy: string[]): Promise<T[]> {
-  if (!supabase) throw new Error('Supabase is not configured.');
-  const rows: T[] = [];
-  for (;;) {
-    let query = supabase.schema(ANALYTICS_SCHEMA).from(table).select('*');
-    for (const column of orderBy) query = query.order(column, { ascending: true });
-    const { data, error } = await query.range(rows.length, rows.length + PAGE_SIZE - 1);
-    if (error) throw new Error(`Could not read analytics.${table}: ${error.message}`);
-    if (!data || data.length === 0) break;
-    rows.push(...(data as T[]));
+/** Reads web/public/locations.json. A missing or broken file leaves every region off the map. */
+async function loadLocations(): Promise<LocationEntry[]> {
+  try {
+    const body = (await fetchJson('./locations.json', 'The locations file')) as { regions?: unknown[] };
+    const entries = Array.isArray(body.regions) ? body.regions : [];
+    const valid = entries.filter(isLocation);
+    if (valid.length < entries.length) {
+      console.warn(`locations.json: ignored ${entries.length - valid.length} entries without region, coordinates or midwives.`);
+    }
+    return valid.map((l) => ({ ...l, latitude: Number(l.latitude), longitude: Number(l.longitude) }));
+  } catch (e) {
+    console.warn(e instanceof Error ? e.message : e);
+    return [];
   }
-  return rows;
 }
 
 export async function loadDashboardData(): Promise<DashboardData> {
-  if (DATA_URL) return loadFromEndpoint(DATA_URL);
-  if (!supabase) return generateDemoData();
-
-  const [regions, facilityHealth, facilityDeliveries, midwifeMonths, ocrDays] = await Promise.all([
-    fetchAll<RegionGeo>('ref_region', ['region']),
-    fetchAll<FacilityHealthRow>('mv_regional_health_indicators', ['facility_id']),
-    fetchAll<FacilityDeliveryRow>('mv_facility_delivery_outcomes', ['facility_id', 'place_of_delivery']),
-    fetchAll<MidwifeMonthRow>('mv_midwife_monthly_performance', ['midwife_id', 'report_month']),
-    fetchAll<OcrDayRow>('mv_ocr_extraction_quality', ['capture_date', 'document_section']),
-  ]);
-
-  return {
-    source: 'supabase',
-    loadedAt: new Date(),
-    regions,
-    facilityHealth,
-    facilityDeliveries,
-    midwifeMonths,
-    ocrDays,
-  };
+  if (!DATA_URL) return generateDemoData();
+  const [data, locations] = await Promise.all([loadFromN8n(DATA_URL), loadLocations()]);
+  return { ...data, locations };
 }

@@ -4,137 +4,128 @@ import { StackedBar } from '../components/StackedBar';
 import { StatTile } from '../components/StatTile';
 import { TrendChart } from '../components/TrendChart';
 import { useReadyDashboard } from '../data/DataContext';
-import { fmtDay, fmtHours, fmtInt, fmtPct, fmtSection, ratio } from '../lib/format';
-import type { MidwifeMonthRow, OcrDayRow } from '../lib/types';
+import { addOperations, emptyOperations, makeRegionLookup, type OperationsTotals } from '../lib/aggregate';
+import { fmtDay, fmtInt, fmtPct, fmtSection, ratio } from '../lib/format';
+import type { DocumentDayRow } from '../lib/types';
 
-interface OcrTotals {
-  submissions: number;
-  captured: number;
-  syncFailed: number;
-  pendingAi: number;
-  needsReview: number;
-  registered: number;
-  rejected: number;
-  syncFailures: number;
+// document_submissions.status values grouped by what has to happen next.
+// Statuses not listed here are counted under "Other".
+const STATUS_GROUPS = [
+  { key: 'done', label: 'Registered', statuses: ['REGISTERED', 'SYNCED'], color: 'var(--series-1)' },
+  {
+    key: 'review',
+    label: 'Needs a person',
+    statuses: ['NEEDS_REVIEW', 'MANUAL_REVIEW_REQUIRED', 'DUPLICATE_SUSPECTED'],
+    color: 'var(--series-2)',
+  },
+  { key: 'ocr', label: 'Waiting for OCR', statuses: ['PENDING_AI', 'PROCESSING_FAILED'], color: 'var(--series-3)' },
+  { key: 'device', label: 'Not synced yet', statuses: ['CAPTURED', 'SYNC_FAILED'], color: 'var(--series-4)' },
+  {
+    key: 'matching',
+    label: 'Read, not yet registered',
+    statuses: ['AI_PROCESSED', 'VALIDATED', 'PATIENT_MATCHED'],
+    color: 'var(--series-5)',
+  },
+  { key: 'superseded', label: 'Superseded', statuses: ['SUPERSEDED'], color: 'var(--series-6)' },
+];
+
+const WAITING_GROUPS = new Set(['review', 'ocr', 'device', 'matching']);
+
+interface DocTotals {
+  documents: number;
+  verified: number;
+  statusCounts: Map<string, number>;
+  aiConfidenceSum: number;
+  aiConfidenceN: number;
   fields: number;
   illegible: number;
-  needsReviewFields: number;
-  autoAccepted: number;
-  autoReviewed: number;
-  autoCorrected: number;
-  confidenceSum: number;
-  confidenceN: number;
+  needsReview: number;
+  unknown: number;
+  notProvided: number;
+  confirmed: number;
+  manual: number;
 }
 
-const emptyOcr = (): OcrTotals => ({
-  submissions: 0, captured: 0, syncFailed: 0, pendingAi: 0, needsReview: 0, registered: 0, rejected: 0,
-  syncFailures: 0, fields: 0, illegible: 0, needsReviewFields: 0, autoAccepted: 0, autoReviewed: 0,
-  autoCorrected: 0, confidenceSum: 0, confidenceN: 0,
+const emptyDoc = (): DocTotals => ({
+  documents: 0, verified: 0, statusCounts: new Map(), aiConfidenceSum: 0, aiConfidenceN: 0, fields: 0,
+  illegible: 0, needsReview: 0, unknown: 0, notProvided: 0, confirmed: 0, manual: 0,
 });
 
-function addOcr(t: OcrTotals, r: OcrDayRow): OcrTotals {
-  t.submissions += Number(r.submissions);
-  t.captured += Number(r.status_captured);
-  t.syncFailed += Number(r.status_sync_failed);
-  t.pendingAi += Number(r.status_pending_ai);
-  t.needsReview += Number(r.status_needs_review);
-  t.registered += Number(r.status_registered);
-  t.rejected += Number(r.status_rejected);
-  t.syncFailures += Number(r.sync_failures);
-  t.fields += Number(r.fields);
-  t.illegible += Number(r.illegible_fields);
-  t.needsReviewFields += Number(r.needs_review_fields);
-  t.autoAccepted += Number(r.auto_accepted_fields);
-  t.autoReviewed += Number(r.auto_accepted_reviewed);
-  t.autoCorrected += Number(r.auto_accepted_corrected);
-  // The view stores averages with their counts, so weight by the count to combine days.
-  if (r.avg_field_confidence !== null) {
-    t.confidenceSum += Number(r.avg_field_confidence) * Number(r.field_confidence_n);
-    t.confidenceN += Number(r.field_confidence_n);
+function addDoc(t: DocTotals, r: DocumentDayRow): DocTotals {
+  t.documents += Number(r.documents);
+  t.verified += Number(r.verified);
+  for (const [status, n] of Object.entries(r.status_counts ?? {})) {
+    t.statusCounts.set(status, (t.statusCounts.get(status) ?? 0) + Number(n));
   }
+  t.aiConfidenceSum += Number(r.ai_confidence_sum);
+  t.aiConfidenceN += Number(r.ai_confidence_n);
+  t.fields += Number(r.fields);
+  t.illegible += Number(r.fields_illegible);
+  t.needsReview += Number(r.fields_needs_review);
+  t.unknown += Number(r.fields_unknown);
+  t.notProvided += Number(r.fields_not_provided);
+  t.confirmed += Number(r.fields_confirmed);
+  t.manual += Number(r.fields_manual);
   return t;
 }
 
-interface MidwifeTotals {
-  id: number;
-  code: string;
-  region: string | null;
-  facility: string | null;
-  documents: number;
-  verified: number;
-  open: number;
-  syncFailures: number;
-  pregnancies: number;
-  latestDelay: number | null;
+function groupStatuses(counts: Map<string, number>) {
+  const known = new Set(STATUS_GROUPS.flatMap((g) => g.statuses));
+  const groups = STATUS_GROUPS.map((g) => ({
+    key: g.key,
+    label: g.label,
+    color: g.color,
+    value: g.statuses.reduce((n, s) => n + (counts.get(s) ?? 0), 0),
+  }));
+  const other = [...counts.entries()].filter(([s]) => !known.has(s)).reduce((n, [, v]) => n + v, 0);
+  if (other > 0) groups.push({ key: 'other', label: 'Other', color: 'var(--neutral-fill)', value: other });
+  return groups;
 }
 
-function buildMidwifeTotals(rows: MidwifeMonthRow[]): MidwifeTotals[] {
-  const byId = new Map<number, MidwifeTotals & { latestMonth: string }>();
-  for (const r of rows) {
-    const t = byId.get(r.midwife_id) ?? {
-      id: r.midwife_id,
-      code: r.midwife_code,
-      region: r.region,
-      facility: r.home_facility_code,
-      documents: 0,
-      verified: 0,
-      open: 0,
-      syncFailures: 0,
-      pregnancies: 0,
-      latestDelay: null,
-      latestMonth: '',
-    };
-    t.documents += Number(r.documents_captured);
-    t.verified += Number(r.documents_verified);
-    t.open += Number(r.documents_open);
-    t.syncFailures += Number(r.sync_failures);
-    t.pregnancies += Number(r.pregnancies_enrolled);
-    if (r.report_month > t.latestMonth) {
-      t.latestMonth = r.report_month;
-      t.latestDelay = r.median_sync_delay_hours === null ? null : Number(r.median_sync_delay_hours);
-    }
-    byId.set(r.midwife_id, t);
-  }
-  return [...byId.values()];
+/** Share of reviewed fields a midwife had to change: how often the OCR value was wrong. */
+const correctionRate = (t: DocTotals) => ratio(t.manual, t.manual + t.confirmed);
+
+interface MidwifeTotals extends OperationsTotals {
+  id: string;
+  region: string;
 }
 
 const MIDWIFE_COLUMNS: Column<MidwifeTotals>[] = [
-  { key: 'code', label: 'Midwife', sortValue: (r) => r.code, render: (r) => <span className="mono">{r.code}</span> },
+  { key: 'id', label: 'Midwife', sortValue: (r) => r.id, render: (r) => <span className="mono">{r.id}</span> },
   { key: 'region', label: 'Region', sortValue: (r) => r.region },
-  { key: 'facility', label: 'Home facility', sortValue: (r) => r.facility, render: (r) => <span className="mono">{r.facility ?? '—'}</span> },
-  { key: 'pregnancies', label: 'Pregnancies enrolled', numeric: true, sortValue: (r) => r.pregnancies, render: (r) => fmtInt(r.pregnancies) },
-  { key: 'documents', label: 'Documents', numeric: true, sortValue: (r) => r.documents, render: (r) => fmtInt(r.documents) },
+  { key: 'registered', label: 'Women registered', numeric: true, sortValue: (r) => r.patients_registered, render: (r) => fmtInt(r.patients_registered) },
+  { key: 'documents', label: 'Forms', numeric: true, sortValue: (r) => r.documents_captured, render: (r) => fmtInt(r.documents_captured) },
   {
     key: 'verified',
     label: 'Verified',
     numeric: true,
-    sortValue: (r) => ratio(r.verified, r.documents),
-    render: (r) => fmtPct(ratio(r.verified, r.documents), 0),
+    sortValue: (r) => ratio(r.documents_verified, r.documents_captured),
+    render: (r) => fmtPct(ratio(r.documents_verified, r.documents_captured), 0),
   },
-  { key: 'open', label: 'Waiting', numeric: true, sortValue: (r) => r.open, render: (r) => fmtInt(r.open) },
-  { key: 'sync', label: 'Sync failures', numeric: true, sortValue: (r) => r.syncFailures, render: (r) => fmtInt(r.syncFailures) },
+  { key: 'waiting', label: 'Waiting', numeric: true, sortValue: (r) => r.documents_waiting, render: (r) => fmtInt(r.documents_waiting) },
+  { key: 'sync', label: 'Sync failed', numeric: true, sortValue: (r) => r.documents_sync_failed, render: (r) => fmtInt(r.documents_sync_failed) },
   {
-    key: 'delay',
-    label: 'Sync delay (latest month)',
+    key: 'processing',
+    label: 'OCR failed',
     numeric: true,
-    sortValue: (r) => r.latestDelay,
-    render: (r) => fmtHours(r.latestDelay),
+    sortValue: (r) => r.documents_processing_failed,
+    render: (r) => fmtInt(r.documents_processing_failed),
   },
 ];
 
-interface SectionRow extends OcrTotals {
+interface SectionRow extends DocTotals {
   section: string;
 }
 
 const SECTION_COLUMNS: Column<SectionRow>[] = [
   { key: 'section', label: 'Form section', sortValue: (r) => fmtSection(r.section) },
-  { key: 'submissions', label: 'Submissions', numeric: true, sortValue: (r) => r.submissions, render: (r) => fmtInt(r.submissions) },
+  { key: 'documents', label: 'Forms', numeric: true, sortValue: (r) => r.documents, render: (r) => fmtInt(r.documents) },
   {
     key: 'confidence',
-    label: 'Field confidence',
+    label: 'OCR confidence',
     numeric: true,
-    sortValue: (r) => ratio(r.confidenceSum, r.confidenceN),
-    render: (r) => fmtPct(ratio(r.confidenceSum, r.confidenceN)),
+    sortValue: (r) => ratio(r.aiConfidenceSum, r.aiConfidenceN),
+    render: (r) => fmtPct(ratio(r.aiConfidenceSum, r.aiConfidenceN)),
   },
   {
     key: 'illegible',
@@ -145,51 +136,67 @@ const SECTION_COLUMNS: Column<SectionRow>[] = [
   },
   {
     key: 'review',
-    label: 'Fields sent to review',
+    label: 'Fields needing review',
     numeric: true,
-    sortValue: (r) => ratio(r.needsReviewFields, r.fields),
-    render: (r) => fmtPct(ratio(r.needsReviewFields, r.fields)),
+    sortValue: (r) => ratio(r.needsReview, r.fields),
+    render: (r) => fmtPct(ratio(r.needsReview, r.fields)),
   },
   {
-    key: 'silent',
-    label: 'Auto-accepted but wrong',
+    key: 'missing',
+    label: 'Not provided or unknown',
     numeric: true,
-    sortValue: (r) => ratio(r.autoCorrected, r.autoReviewed),
-    render: (r) => fmtPct(ratio(r.autoCorrected, r.autoReviewed)),
+    sortValue: (r) => ratio(r.notProvided + r.unknown, r.fields),
+    render: (r) => fmtPct(ratio(r.notProvided + r.unknown, r.fields)),
+  },
+  {
+    key: 'corrected',
+    label: 'Corrected by midwife',
+    numeric: true,
+    sortValue: (r) => correctionRate(r),
+    render: (r) => fmtPct(correctionRate(r)),
   },
 ];
 
 export function OperationsPage() {
   const { data } = useReadyDashboard();
 
-  const totals = useMemo(() => data.ocrDays.reduce(addOcr, emptyOcr()), [data.ocrDays]);
+  const totals = useMemo(() => data.documentDays.reduce(addDoc, emptyDoc()), [data.documentDays]);
 
   const daily = useMemo(() => {
-    const byDay = new Map<string, OcrTotals>();
-    for (const r of data.ocrDays) {
+    const byDay = new Map<string, DocTotals>();
+    for (const r of data.documentDays) {
       const day = r.capture_date.slice(0, 10);
-      byDay.set(day, addOcr(byDay.get(day) ?? emptyOcr(), r));
+      byDay.set(day, addDoc(byDay.get(day) ?? emptyDoc(), r));
     }
     return [...byDay.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([day, t]) => ({
         day,
-        submissions: t.submissions,
+        documents: t.documents,
         illegible: ratio(t.illegible, t.fields) ?? 0,
-        review: ratio(t.needsReviewFields, t.fields) ?? 0,
+        review: ratio(t.needsReview, t.fields) ?? 0,
       }));
-  }, [data.ocrDays]);
+  }, [data.documentDays]);
 
   const sections = useMemo<SectionRow[]>(() => {
-    const bySection = new Map<string, OcrTotals>();
-    for (const r of data.ocrDays) bySection.set(r.document_section, addOcr(bySection.get(r.document_section) ?? emptyOcr(), r));
+    const bySection = new Map<string, DocTotals>();
+    for (const r of data.documentDays) {
+      bySection.set(r.document_section, addDoc(bySection.get(r.document_section) ?? emptyDoc(), r));
+    }
     return [...bySection.entries()].map(([section, t]) => ({ section, ...t }));
-  }, [data.ocrDays]);
+  }, [data.documentDays]);
 
-  const midwives = useMemo(() => buildMidwifeTotals(data.midwifeMonths), [data.midwifeMonths]);
-  const waiting = totals.captured + totals.syncFailed + totals.pendingAi + totals.needsReview;
+  const midwives = useMemo<MidwifeTotals[]>(() => {
+    const lookup = makeRegionLookup(data.locations);
+    const byId = new Map<string, OperationsTotals>();
+    for (const r of data.midwifeMonths) byId.set(r.midwife_id, addOperations(byId.get(r.midwife_id) ?? emptyOperations(), r));
+    return [...byId.entries()].map(([id, t]) => ({ id, region: lookup(id).region, ...t }));
+  }, [data.midwifeMonths, data.locations]);
+
+  const statusGroups = groupStatuses(totals.statusCounts);
+  const waiting = statusGroups.filter((g) => WAITING_GROUPS.has(g.key)).reduce((n, g) => n + g.value, 0);
   const range =
-    daily.length > 0 ? `${fmtDay(daily[0].day)} – ${fmtDay(daily[daily.length - 1].day)}` : 'No submissions yet';
+    daily.length > 0 ? `${fmtDay(daily[0].day)} – ${fmtDay(daily[daily.length - 1].day)}` : 'No forms captured yet';
 
   return (
     <div className="page">
@@ -197,49 +204,41 @@ export function OperationsPage() {
         <div>
           <p className="eyebrow">Paper-to-digital pipeline</p>
           <h1>Data capture</h1>
-          <p className="muted">
-            Forms photographed by midwives, synced over poor connections and read by OCR. {range}.
-          </p>
+          <p className="muted">Forms photographed by midwives, synced over poor connections and read by OCR. {range}.</p>
         </div>
       </header>
 
       <div className="kpi-row">
-        <StatTile label="Form sections captured" value={fmtInt(totals.submissions)} />
-        <StatTile label="Waiting in the pipeline" value={fmtInt(waiting)} note={`${fmtInt(totals.syncFailed)} stuck on sync`} />
-        <StatTile label="Average field confidence" value={fmtPct(ratio(totals.confidenceSum, totals.confidenceN))} />
-        <StatTile label="Illegible fields" value={fmtPct(ratio(totals.illegible, totals.fields))} note={`${fmtInt(totals.illegible)} fields`} />
+        <StatTile label="Forms captured" value={fmtInt(totals.documents)} />
         <StatTile
-          label="Auto-accepted but wrong"
-          value={fmtPct(ratio(totals.autoCorrected, totals.autoReviewed))}
-          note="Share later corrected by a midwife"
+          label="Waiting in the pipeline"
+          value={fmtInt(waiting)}
+          note={`${fmtInt(totals.statusCounts.get('SYNC_FAILED') ?? 0)} failed to sync`}
         />
-        <StatTile label="Sync failures" value={fmtInt(totals.syncFailures)} />
+        <StatTile label="Verified by midwife" value={fmtPct(ratio(totals.verified, totals.documents), 0)} />
+        <StatTile label="Average OCR confidence" value={fmtPct(ratio(totals.aiConfidenceSum, totals.aiConfidenceN))} />
+        <StatTile label="Illegible fields" value={fmtPct(ratio(totals.illegible, totals.fields))} note={`${fmtInt(totals.illegible)} ${totals.illegible === 1 ? 'field' : 'fields'}`} />
+        <StatTile
+          label="Corrected by midwife"
+          value={fmtPct(correctionRate(totals))}
+          note="Share of reviewed fields the midwife changed"
+        />
       </div>
 
       <section className="panel" aria-labelledby="status-title">
-        <h2 id="status-title">Where every form section is now</h2>
-        <StackedBar
-          unit="form sections"
-          segments={[
-            { key: 'registered', label: 'Registered', value: totals.registered, color: 'var(--series-1)' },
-            { key: 'review', label: 'Needs review', value: totals.needsReview, color: 'var(--series-2)' },
-            { key: 'pending', label: 'Pending OCR', value: totals.pendingAi, color: 'var(--series-3)' },
-            { key: 'captured', label: 'On device, not synced', value: totals.captured, color: 'var(--series-4)' },
-            { key: 'sync', label: 'Sync failed', value: totals.syncFailed, color: 'var(--series-5)' },
-            { key: 'rejected', label: 'Rejected', value: totals.rejected, color: 'var(--series-6)' },
-          ]}
-        />
+        <h2 id="status-title">Where every form is now</h2>
+        <StackedBar unit="forms" segments={statusGroups} />
       </section>
 
       <div className="chart-grid">
         <section className="panel" aria-labelledby="daily-title">
-          <h2 id="daily-title">Form sections per day</h2>
+          <h2 id="daily-title">Forms captured per day</h2>
           <TrendChart
             kind="bar"
             data={daily}
             xKey="day"
             xFormat={fmtDay}
-            series={[{ key: 'submissions', label: 'Form sections', color: 'var(--series-1)' }]}
+            series={[{ key: 'documents', label: 'Forms', color: 'var(--series-1)' }]}
           />
         </section>
         <section className="panel" aria-labelledby="ocr-title">
@@ -251,7 +250,7 @@ export function OperationsPage() {
             yFormat={(v) => fmtPct(v, 0)}
             integerAxis={false}
             series={[
-              { key: 'review', label: 'Sent to review', color: 'var(--series-1)' },
+              { key: 'review', label: 'Needs review', color: 'var(--series-1)' },
               { key: 'illegible', label: 'Illegible', color: 'var(--series-2)' },
             ]}
           />
@@ -272,8 +271,8 @@ export function OperationsPage() {
       <section className="panel" aria-labelledby="midwives-title">
         <h2 id="midwives-title">Midwives</h2>
         <p className="muted">
-          Totals across every month loaded, lowest verification first. Low verification and frequent sync failures
-          point to where training or equipment is needed.
+          Lowest verification first. Low verification and frequent sync failures point to where training or
+          equipment is needed.
         </p>
         <DataTable
           rows={midwives}

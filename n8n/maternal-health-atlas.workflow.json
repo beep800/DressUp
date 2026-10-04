@@ -21,11 +21,11 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Every dashboard view as one JSON object, shaped the way the web app expects.\nSELECT json_build_object(\n  'regions', (\n    SELECT coalesce(json_agg(r ORDER BY r.region), '[]'::json)\n    FROM analytics.ref_region r),\n  'facilityHealth', (\n    SELECT coalesce(json_agg(h ORDER BY h.facility_id), '[]'::json)\n    FROM analytics.mv_regional_health_indicators h),\n  'facilityDeliveries', (\n    SELECT coalesce(json_agg(d ORDER BY d.facility_id, d.place_of_delivery), '[]'::json)\n    FROM analytics.mv_facility_delivery_outcomes d),\n  -- Last 24 months and 180 days keep the response small; widen if you need more history.\n  'midwifeMonths', (\n    SELECT coalesce(json_agg(m ORDER BY m.midwife_id, m.report_month), '[]'::json)\n    FROM analytics.mv_midwife_monthly_performance m\n    WHERE m.report_month >= date_trunc('month', current_date) - interval '23 months'),\n  'ocrDays', (\n    SELECT coalesce(json_agg(o ORDER BY o.capture_date, o.document_section), '[]'::json)\n    FROM analytics.mv_ocr_extraction_quality o\n    WHERE o.capture_date >= current_date - 179)\n) AS payload;",
+        "query": "-- Maternal Health Atlas: dashboard data computed live from the census tables.\n-- Read-only. Returns one row with one JSON column, `payload`.\n-- This is the query inside the \"Read census tables\" node of the n8n workflow.\nWITH settings AS (\n  -- How the forms code their answers. Change these if yours differ.\n  SELECT\n    2 AS cesarean_code,       -- delivery.type_of_delivery value that means caesarean\n    1 AS test_positive_code,  -- *_test_result value that means positive\n    0 AS test_negative_code   -- *_test_result value that means negative; anything else counts as not tested\n),\n\n-- One row per woman. OCR readings outside a plausible range are treated as missing.\npatients AS (\n  SELECT\n    coalesce(nullif(trim(p.midwife_code), ''), 'Unassigned') AS midwife_code,\n    CASE WHEN p.age_years BETWEEN 10 AND 60 THEN p.age_years END AS age,\n    p.desired_pregnancy,\n    p.consanguinity,\n    mh.hypertension_history,\n    mh.diabetes_mellitus,\n    oh.previous_cesarean,\n    oh.intrauterine_fetal_deaths,\n    CASE WHEN cp.gestational_age_at_enrollment BETWEEN 0 AND 45 THEN cp.gestational_age_at_enrollment END AS ga_enrol,\n    CASE WHEN cp.mean_systolic_bp BETWEEN 50 AND 260 THEN cp.mean_systolic_bp END AS sbp,\n    CASE WHEN cp.mean_diastolic_bp BETWEEN 30 AND 160 THEN cp.mean_diastolic_bp END AS dbp,\n    cp.proteinuria,\n    -- Haemoglobin in g/dL; readings that look like g/L are converted.\n    CASE WHEN cp.hemoglobin BETWEEN 2 AND 20 THEN cp.hemoglobin\n         WHEN cp.hemoglobin > 20 AND cp.hemoglobin <= 200 THEN cp.hemoglobin / 10 END AS hb,\n    cp.gestational_dm,\n    cp.hiv_test_result AS hiv,\n    cp.syphilis_test_result AS syphilis,\n    cp.hepatitis_c_test_result AS hep_c,\n    d.id IS NOT NULL AS delivered,\n    CASE WHEN d.gestational_age_at_birth BETWEEN 20 AND 45 THEN d.gestational_age_at_birth END AS ga_birth,\n    d.preterm_birth,\n    d.type_of_delivery,\n    CASE WHEN d.child_birth_weight BETWEEN 300 AND 6500 THEN d.child_birth_weight END AS weight_g,\n    CASE WHEN d.head_circumference BETWEEN 18 AND 45 THEN d.head_circumference END AS head_cm,\n    pn.breastfeeding_initiated,\n    pn.referral_to_higher_care\n  FROM public.patient_identification p\n  LEFT JOIN public.current_pregnancy      cp ON cp.original_id = p.original_id\n  LEFT JOIN public.obstetric_history      oh ON oh.original_id = p.original_id\n  LEFT JOIN public.medical_family_history mh ON mh.original_id = p.original_id\n  LEFT JOIN public.delivery               d  ON d.original_id  = p.original_id\n  LEFT JOIN public.postpartum_newborn     pn ON pn.original_id = p.original_id\n),\n\nflags AS (\n  SELECT\n    pt.*,\n    (pt.sbp >= 140 OR pt.dbp >= 90) AS htn,\n    -- Gestational age at birth decides when recorded; otherwise the form's preterm box.\n    CASE WHEN pt.ga_birth IS NOT NULL THEN pt.ga_birth < 37\n         WHEN pt.preterm_birth IS NOT NULL THEN pt.preterm_birth = 1 END AS preterm,\n    pt.type_of_delivery = s.cesarean_code AS cesarean,\n    s.test_positive_code AS pos,\n    s.test_negative_code AS neg\n  FROM patients pt\n  CROSS JOIN settings s\n),\n\nhealth AS (\n  SELECT\n    midwife_code,\n    count(*) AS pregnancies,\n\n    count(age) AS age_recorded,\n    count(*) FILTER (WHERE age < 18) AS adolescent_pregnancies,\n    count(*) FILTER (WHERE age >= 35) AS advanced_maternal_age_pregnancies,\n    count(desired_pregnancy) AS intent_recorded,\n    count(*) FILTER (WHERE desired_pregnancy = 0) AS unintended_pregnancies,\n    count(consanguinity) AS consanguinity_recorded,\n    count(*) FILTER (WHERE consanguinity > 0) AS consanguineous_marriages,\n\n    count(hypertension_history) AS family_hypertension_recorded,\n    count(*) FILTER (WHERE hypertension_history > 0) AS family_hypertension,\n    count(diabetes_mellitus) AS family_diabetes_recorded,\n    count(*) FILTER (WHERE diabetes_mellitus > 0) AS family_diabetes,\n    count(previous_cesarean) AS prior_cesarean_recorded,\n    count(*) FILTER (WHERE previous_cesarean > 0) AS prior_cesarean,\n    count(intrauterine_fetal_deaths) AS prior_iufd_recorded,\n    count(*) FILTER (WHERE intrauterine_fetal_deaths > 0) AS prior_iufd,\n\n    count(ga_enrol) AS enrollment_ga_recorded,\n    count(*) FILTER (WHERE ga_enrol < 14) AS enrolled_first_trimester,\n    count(*) FILTER (WHERE ga_enrol < 12) AS enrolled_before_12_weeks,\n    percentile_cont(0.5) WITHIN GROUP (ORDER BY ga_enrol) AS median_enrollment_ga_weeks,\n\n    count(*) FILTER (WHERE sbp IS NOT NULL OR dbp IS NOT NULL) AS bp_recorded,\n    count(*) FILTER (WHERE htn) AS hypertension,\n    count(*) FILTER (WHERE sbp >= 160 OR dbp >= 110) AS severe_hypertension,\n    count(*) FILTER (WHERE htn AND proteinuria > 0) AS preeclampsia_signs,\n    count(hb) AS hemoglobin_recorded,\n    count(*) FILTER (WHERE hb < 7) AS severe_anemia,\n    count(*) FILTER (WHERE hb < 10) AS moderate_or_severe_anemia,\n    count(gestational_dm) AS gdm_recorded,\n    count(*) FILTER (WHERE gestational_dm > 0) AS gestational_diabetes,\n    count(*) FILTER (WHERE hiv IN (pos, neg)) AS hiv_tested,\n    count(*) FILTER (WHERE hiv = pos) AS hiv_positive,\n    count(*) FILTER (WHERE syphilis IN (pos, neg)) AS syphilis_tested,\n    count(*) FILTER (WHERE syphilis = pos) AS syphilis_positive,\n    count(*) FILTER (WHERE hep_c IN (pos, neg)) AS hepatitis_c_tested,\n    count(*) FILTER (WHERE hep_c = pos) AS hepatitis_c_positive,\n\n    count(*) FILTER (WHERE delivered) AS deliveries,\n    count(preterm) AS preterm_recorded,\n    count(*) FILTER (WHERE preterm) AS preterm_births,\n    count(type_of_delivery) AS delivery_type_recorded,\n    count(*) FILTER (WHERE cesarean) AS cesareans,\n    count(*) FILTER (WHERE type_of_delivery IS NOT NULL AND previous_cesarean = 0) AS deliveries_without_prior_cesarean,\n    count(*) FILTER (WHERE cesarean AND previous_cesarean = 0) AS primary_cesareans,\n    count(*) FILTER (WHERE type_of_delivery IS NOT NULL AND previous_cesarean > 0) AS deliveries_after_prior_cesarean,\n    count(*) FILTER (WHERE cesarean AND previous_cesarean > 0) AS repeat_cesareans,\n\n    -- This delivery compared between women with and without a previous stillbirth\n    count(*) FILTER (WHERE type_of_delivery IS NOT NULL AND intrauterine_fetal_deaths > 0) AS type_recorded_after_iufd,\n    count(*) FILTER (WHERE cesarean AND intrauterine_fetal_deaths > 0) AS cesareans_after_iufd,\n    count(*) FILTER (WHERE preterm IS NOT NULL AND intrauterine_fetal_deaths > 0) AS preterm_recorded_after_iufd,\n    count(*) FILTER (WHERE preterm AND intrauterine_fetal_deaths > 0) AS preterm_after_iufd,\n    count(*) FILTER (WHERE type_of_delivery IS NOT NULL AND intrauterine_fetal_deaths = 0) AS type_recorded_no_iufd,\n    count(*) FILTER (WHERE cesarean AND intrauterine_fetal_deaths = 0) AS cesareans_no_iufd,\n    count(*) FILTER (WHERE preterm IS NOT NULL AND intrauterine_fetal_deaths = 0) AS preterm_recorded_no_iufd,\n    count(*) FILTER (WHERE preterm AND intrauterine_fetal_deaths = 0) AS preterm_no_iufd,\n\n    count(weight_g) AS birth_weight_recorded,\n    coalesce(sum(weight_g), 0) AS birth_weight_sum_g,\n    count(*) FILTER (WHERE weight_g < 2500) AS low_birth_weight,\n    count(*) FILTER (WHERE weight_g < 1500) AS very_low_birth_weight,\n    count(head_cm) AS head_circumference_recorded,\n    coalesce(sum(head_cm), 0) AS head_circumference_sum_cm,\n\n    count(breastfeeding_initiated) AS breastfeeding_recorded,\n    count(*) FILTER (WHERE breastfeeding_initiated > 0) AS breastfeeding_initiated,\n    count(referral_to_higher_care) AS referral_recorded,\n    count(*) FILTER (WHERE referral_to_higher_care > 0) AS referred_to_higher_care\n  FROM flags\n  GROUP BY midwife_code\n),\n\n-- How many of each midwife's patients gave each answer.\nsocioeconomic AS (\n  SELECT\n    coalesce(nullif(trim(p.midwife_code), ''), 'Unassigned') AS midwife_code,\n    a.attribute,\n    lower(trim(a.value)) AS value,\n    count(*) AS patients\n  FROM public.patient_identification p\n  CROSS JOIN LATERAL (VALUES\n    ('education_level', p.education_level),\n    ('profession', p.profession),\n    ('husband_profession', p.husband_profession)\n  ) AS a (attribute, value)\n  WHERE nullif(trim(a.value), '') IS NOT NULL\n  GROUP BY 1, 2, 3\n),\n\n-- Forms from the last 24 months.\ndocs AS (\n  SELECT\n    ds.id,\n    coalesce(nullif(trim(ds.midwife_id), ''), 'Unassigned') AS midwife_id,\n    coalesce(nullif(trim(ds.document_section), ''), 'UNKNOWN') AS section,\n    coalesce(ds.status, 'UNKNOWN') AS status,\n    ds.verified_by_midwife,\n    -- Confidence as a fraction; scores recorded out of 100 are converted.\n    CASE WHEN ds.ai_confidence_score > 1 THEN ds.ai_confidence_score / 100 ELSE ds.ai_confidence_score END AS ai_confidence,\n    ds.created_at::date AS capture_date,\n    date_trunc('month', ds.created_at)::date AS month\n  FROM public.document_submissions ds\n  WHERE ds.created_at >= date_trunc('month', current_date) - interval '23 months'\n),\n\n-- The month each woman's first form was captured, and by whom.\nfirst_forms AS (\n  SELECT DISTINCT ON (woman)\n    woman,\n    coalesce(nullif(trim(midwife_id), ''), 'Unassigned') AS midwife_id,\n    date_trunc('month', created_at)::date AS month\n  FROM (\n    SELECT coalesce(p.original_id, ds.original_id) AS woman, ds.midwife_id, ds.created_at\n    FROM public.document_submissions ds\n    LEFT JOIN public.patient_identification p ON p.id = ds.patient_ref\n  ) linked\n  WHERE woman IS NOT NULL AND created_at IS NOT NULL\n  ORDER BY woman, created_at\n),\n\nmidwife_months AS (\n  SELECT\n    d.midwife_id,\n    d.month,\n    count(*) AS documents_captured,\n    count(*) FILTER (WHERE d.verified_by_midwife) AS documents_verified,\n    count(*) FILTER (WHERE d.status IN ('CAPTURED', 'SYNC_FAILED', 'PENDING_AI', 'PROCESSING_FAILED',\n                                        'NEEDS_REVIEW', 'MANUAL_REVIEW_REQUIRED', 'DUPLICATE_SUSPECTED',\n                                        'AI_PROCESSED', 'VALIDATED', 'PATIENT_MATCHED')) AS documents_waiting,\n    count(*) FILTER (WHERE d.status = 'SYNC_FAILED') AS documents_sync_failed,\n    count(*) FILTER (WHERE d.status = 'PROCESSING_FAILED') AS documents_processing_failed,\n    coalesce(max(r.registered), 0) AS patients_registered\n  FROM docs d\n  LEFT JOIN (\n    SELECT midwife_id, month, count(*) AS registered FROM first_forms GROUP BY 1, 2\n  ) r ON r.midwife_id = d.midwife_id AND r.month = d.month\n  GROUP BY d.midwife_id, d.month\n),\n\n-- OCR field results per form, for the last 180 days.\nfield_stats AS (\n  SELECT\n    f.record_id,\n    count(*) AS fields,\n    count(*) FILTER (WHERE f.status = 'KNOWN') AS fields_known,\n    count(*) FILTER (WHERE f.status = 'UNKNOWN') AS fields_unknown,\n    count(*) FILTER (WHERE f.status = 'NOT_PROVIDED') AS fields_not_provided,\n    count(*) FILTER (WHERE f.status = 'ILLEGIBLE') AS fields_illegible,\n    count(*) FILTER (WHERE f.status = 'NOT_APPLICABLE') AS fields_not_applicable,\n    count(*) FILTER (WHERE f.status = 'NEEDS_REVIEW') AS fields_needs_review,\n    count(*) FILTER (WHERE f.source = 'ai') AS fields_ai,\n    count(*) FILTER (WHERE f.source = 'confirmed') AS fields_confirmed,\n    count(*) FILTER (WHERE f.source = 'manual') AS fields_manual,\n    coalesce(sum(f.confidence), 0) AS confidence_sum,\n    count(f.confidence) AS confidence_n\n  FROM public.fields f\n  JOIN docs d ON d.id = f.record_id AND d.capture_date >= current_date - 179\n  GROUP BY f.record_id\n),\n\nday_status AS (\n  SELECT capture_date, section, status, count(*) AS n\n  FROM docs\n  WHERE capture_date >= current_date - 179\n  GROUP BY 1, 2, 3\n),\n\ndocument_days AS (\n  SELECT\n    d.capture_date,\n    d.section AS document_section,\n    count(*) AS documents,\n    count(*) FILTER (WHERE d.verified_by_midwife) AS verified,\n    (SELECT jsonb_object_agg(s.status, s.n)\n       FROM day_status s\n      WHERE s.capture_date = d.capture_date AND s.section = d.section) AS status_counts,\n    coalesce(sum(d.ai_confidence), 0) AS ai_confidence_sum,\n    count(d.ai_confidence) AS ai_confidence_n,\n    coalesce(sum(fs.fields), 0) AS fields,\n    coalesce(sum(fs.fields_known), 0) AS fields_known,\n    coalesce(sum(fs.fields_unknown), 0) AS fields_unknown,\n    coalesce(sum(fs.fields_not_provided), 0) AS fields_not_provided,\n    coalesce(sum(fs.fields_illegible), 0) AS fields_illegible,\n    coalesce(sum(fs.fields_not_applicable), 0) AS fields_not_applicable,\n    coalesce(sum(fs.fields_needs_review), 0) AS fields_needs_review,\n    coalesce(sum(fs.fields_ai), 0) AS fields_ai,\n    coalesce(sum(fs.fields_confirmed), 0) AS fields_confirmed,\n    coalesce(sum(fs.fields_manual), 0) AS fields_manual,\n    coalesce(sum(fs.confidence_sum), 0) AS field_confidence_sum,\n    coalesce(sum(fs.confidence_n), 0) AS field_confidence_n\n  FROM docs d\n  LEFT JOIN field_stats fs ON fs.record_id = d.id\n  WHERE d.capture_date >= current_date - 179\n  GROUP BY d.capture_date, d.section\n)\n\nSELECT json_build_object(\n  'midwifeHealth', (SELECT coalesce(json_agg(h ORDER BY h.midwife_code), '[]'::json) FROM health h),\n  'socioeconomic', (SELECT coalesce(json_agg(s ORDER BY s.midwife_code, s.attribute, s.patients DESC), '[]'::json) FROM socioeconomic s),\n  'midwifeMonths', (SELECT coalesce(json_agg(m ORDER BY m.midwife_id, m.month), '[]'::json) FROM midwife_months m),\n  'documentDays',  (SELECT coalesce(json_agg(dd ORDER BY dd.capture_date, dd.document_section), '[]'::json) FROM document_days dd)\n) AS payload;\n",
         "options": {}
       },
       "id": "10af81ba-185d-560c-88ce-1c699dd47378",
-      "name": "Read dashboard views",
+      "name": "Read census tables",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
@@ -35,7 +35,7 @@
       "credentials": {
         "postgres": {
           "id": "",
-          "name": "Supabase (n8n_dashboard)"
+          "name": "Census database"
         }
       }
     },
@@ -62,47 +62,6 @@
         520,
         0
       ]
-    },
-    {
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "hours",
-              "hoursInterval": 1
-            }
-          ]
-        }
-      },
-      "id": "124f7ffc-f4be-5b57-8e7e-63921079f509",
-      "name": "Every hour",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        0,
-        220
-      ]
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT analytics.refresh_reporting_views();",
-        "options": {}
-      },
-      "id": "9ef0024d-d5fa-5bca-8a60-7aeca2904a22",
-      "name": "Refresh dashboard views",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [
-        260,
-        220
-      ],
-      "credentials": {
-        "postgres": {
-          "id": "",
-          "name": "Supabase (n8n_dashboard)"
-        }
-      }
     }
   ],
   "connections": {
@@ -110,29 +69,18 @@
       "main": [
         [
           {
-            "node": "Read dashboard views",
+            "node": "Read census tables",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Read dashboard views": {
+    "Read census tables": {
       "main": [
         [
           {
             "node": "Send to dashboard",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Every hour": {
-      "main": [
-        [
-          {
-            "node": "Refresh dashboard views",
             "type": "main",
             "index": 0
           }

@@ -1,15 +1,10 @@
-// Row shapes of the analytics objects the dashboard reads (see sql/analytics_schema.sql
-// and sql/002_dashboard_access.sql). Column names match the database exactly.
-
-export interface RegionGeo {
-  region: string;
-  country_name: string;
-  latitude: number;
-  longitude: number;
-}
+// Shapes of the JSON the n8n workflow returns (n8n/maternal-health-atlas.workflow.json).
+// Every number is a count computed in SQL from the census tables; rates are worked
+// out in the browser so they stay correct when midwives are grouped into regions.
 
 export const HEALTH_COUNT_KEYS = [
   'pregnancies',
+  // patient_identification
   'age_recorded',
   'adolescent_pregnancies',
   'advanced_maternal_age_pregnancies',
@@ -17,8 +12,17 @@ export const HEALTH_COUNT_KEYS = [
   'unintended_pregnancies',
   'consanguinity_recorded',
   'consanguineous_marriages',
-  'socioeconomic_recorded',
-  'socioeconomically_vulnerable',
+  // medical_family_history
+  'family_hypertension_recorded',
+  'family_hypertension',
+  'family_diabetes_recorded',
+  'family_diabetes',
+  // obstetric_history
+  'prior_cesarean_recorded',
+  'prior_cesarean',
+  'prior_iufd_recorded',
+  'prior_iufd',
+  // current_pregnancy
   'enrollment_ga_recorded',
   'enrolled_first_trimester',
   'enrolled_before_12_weeks',
@@ -37,121 +41,114 @@ export const HEALTH_COUNT_KEYS = [
   'syphilis_positive',
   'hepatitis_c_tested',
   'hepatitis_c_positive',
+  // delivery
   'deliveries',
-  'preterm_deliveries',
-  'cesarean_deliveries',
+  'preterm_recorded',
+  'preterm_births',
+  'delivery_type_recorded',
+  'cesareans',
   'deliveries_without_prior_cesarean',
   'primary_cesareans',
   'deliveries_after_prior_cesarean',
   'repeat_cesareans',
-  'deliveries_after_prior_stillbirth',
-  'cesareans_after_prior_stillbirth',
-  'stillbirths_after_prior_stillbirth',
-  'newborns',
-  'live_births',
-  'stillbirths',
-  'live_births_weighed',
+  'type_recorded_after_iufd',
+  'cesareans_after_iufd',
+  'preterm_recorded_after_iufd',
+  'preterm_after_iufd',
+  'type_recorded_no_iufd',
+  'cesareans_no_iufd',
+  'preterm_recorded_no_iufd',
+  'preterm_no_iufd',
+  'birth_weight_recorded',
+  'birth_weight_sum_g',
   'low_birth_weight',
   'very_low_birth_weight',
-  'sga_assessable',
-  'small_for_gestational_age',
+  'head_circumference_recorded',
+  'head_circumference_sum_cm',
+  // postpartum_newborn
   'breastfeeding_recorded',
-  'breastfed_within_1h',
-  'newborns_referred',
+  'breastfeeding_initiated',
+  'referral_recorded',
+  'referred_to_higher_care',
 ] as const;
 
 export type HealthCountKey = (typeof HEALTH_COUNT_KEYS)[number];
 export type HealthCounts = Record<HealthCountKey, number>;
 
-/** analytics.mv_regional_health_indicators: one row per enrolment facility. */
-export interface FacilityHealthRow extends HealthCounts {
-  facility_id: number;
-  facility_code: string;
-  region: string;
-  district: string;
+/** Counts for the women registered by one midwife (patient_identification.midwife_code). */
+export interface MidwifeHealthRow extends HealthCounts {
+  midwife_code: string;
   median_enrollment_ga_weeks: number | null;
 }
 
-export const DELIVERY_COUNT_KEYS = [
-  'deliveries',
-  'cesareans',
-  'emergency_cesareans',
-  'preterm_deliveries',
-  'maternal_referrals',
-  'deliveries_with_any_referral',
-  'live_births',
-  'stillbirths',
-] as const;
+export type SocioeconomicAttribute = 'education_level' | 'profession' | 'husband_profession';
 
-export type DeliveryCountKey = (typeof DELIVERY_COUNT_KEYS)[number];
-export type DeliveryCounts = Record<DeliveryCountKey, number>;
-
-export type EmoncLevel = 'NONE' | 'BASIC' | 'COMPREHENSIVE';
-export type PlaceOfDelivery = 'FACILITY' | 'HOME' | 'IN_TRANSIT' | 'OTHER';
-
-/** analytics.mv_facility_delivery_outcomes: one row per facility and place of delivery. */
-export interface FacilityDeliveryRow extends DeliveryCounts {
-  facility_id: number;
-  facility_code: string;
-  facility_name: string;
-  region: string;
-  district: string;
-  facility_level: string;
-  emonc_level: EmoncLevel;
-  travel_time_to_referral_min: number | null;
-  place_of_delivery: PlaceOfDelivery;
+/** How many of a midwife's patients gave each answer (lower-cased, trimmed). */
+export interface SocioeconomicRow {
+  midwife_code: string;
+  attribute: SocioeconomicAttribute;
+  value: string;
+  patients: number;
 }
 
-/** analytics.mv_midwife_monthly_performance: one row per midwife and month. */
+/** document_submissions per midwife_id and month. */
 export interface MidwifeMonthRow {
-  midwife_id: number;
-  midwife_code: string;
-  home_facility_code: string | null;
-  region: string | null;
-  district: string | null;
-  report_month: string;
-  pregnancies_enrolled: number;
-  deliveries_recorded: number;
+  midwife_id: string;
+  month: string;
   documents_captured: number;
   documents_verified: number;
-  documents_open: number;
+  documents_waiting: number;
   documents_sync_failed: number;
-  sync_failures: number;
-  median_sync_delay_hours: number | null;
-  median_ai_delay_hours: number | null;
+  documents_processing_failed: number;
+  /** Women whose first form was captured this month. */
+  patients_registered: number;
 }
 
-/** analytics.mv_ocr_extraction_quality: one row per capture day and form section. */
-export interface OcrDayRow {
+/** document_submissions and their OCR fields per capture day and form section. */
+export interface DocumentDayRow {
   capture_date: string;
   document_section: string;
-  submissions: number;
-  status_captured: number;
-  status_sync_failed: number;
-  status_pending_ai: number;
-  status_needs_review: number;
-  status_registered: number;
-  status_rejected: number;
-  sync_failures: number;
-  median_sync_delay_hours: number | null;
-  avg_document_confidence: number | null;
-  document_confidence_n: number;
+  documents: number;
+  verified: number;
+  status_counts: Record<string, number> | null;
+  ai_confidence_sum: number;
+  ai_confidence_n: number;
   fields: number;
-  illegible_fields: number;
-  needs_review_fields: number;
-  auto_accepted_fields: number;
-  auto_accepted_reviewed: number;
-  auto_accepted_corrected: number;
-  avg_field_confidence: number | null;
+  fields_known: number;
+  fields_unknown: number;
+  fields_not_provided: number;
+  fields_illegible: number;
+  fields_not_applicable: number;
+  fields_needs_review: number;
+  fields_ai: number;
+  fields_confirmed: number;
+  fields_manual: number;
+  field_confidence_sum: number;
   field_confidence_n: number;
 }
 
+/** One entry of web/public/locations.json: which midwives work in a region, and where it is. */
+export interface LocationEntry {
+  region: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  midwives: string[];
+}
+
+export interface RegionGeo {
+  region: string;
+  country_name: string;
+  latitude: number;
+  longitude: number;
+}
+
 export interface DashboardData {
-  source: 'supabase' | 'endpoint' | 'demo';
+  source: 'n8n' | 'demo';
   loadedAt: Date;
-  regions: RegionGeo[];
-  facilityHealth: FacilityHealthRow[];
-  facilityDeliveries: FacilityDeliveryRow[];
+  locations: LocationEntry[];
+  midwifeHealth: MidwifeHealthRow[];
+  socioeconomic: SocioeconomicRow[];
   midwifeMonths: MidwifeMonthRow[];
-  ocrDays: OcrDayRow[];
+  documentDays: DocumentDayRow[];
 }

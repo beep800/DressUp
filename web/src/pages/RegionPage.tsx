@@ -8,58 +8,43 @@ import { IndicatorBar, scaleMaxFor } from '../components/IndicatorBar';
 import { StatTile } from '../components/StatTile';
 import { TrendChart } from '../components/TrendChart';
 import { useReadyDashboard } from '../data/DataContext';
-import { addDelivery, emptyDelivery, type RegionSummary } from '../lib/aggregate';
+import { addOperations, emptyOperations, type OperationsTotals, type RegionSummary } from '../lib/aggregate';
 import {
   DOMAINS,
   INDICATOR_BY_ID,
+  MIN_DENOMINATOR,
   STATUS_META,
   evaluateIndicator,
   formatRate,
   type IndicatorResult,
 } from '../lib/concern';
-import { fmtEmonc, fmtInt, fmtMonth, fmtPct, ratio } from '../lib/format';
-import type { EmoncLevel, FacilityHealthRow } from '../lib/types';
+import { fmtInt, fmtMonth, fmtPct, ratio } from '../lib/format';
+import type { MidwifeHealthRow, SocioeconomicAttribute } from '../lib/types';
 
-interface FacilityRow {
-  id: number;
+interface MidwifeRow {
   code: string;
-  name: string | null;
-  district: string;
-  emonc: EmoncLevel | null;
-  travelMin: number | null;
-  health: FacilityHealthRow;
-  deliveriesHere: number;
+  health: MidwifeHealthRow;
+  operations: OperationsTotals;
   results: Map<string, IndicatorResult>;
 }
 
-const FACILITY_INDICATORS = ['first_trimester', 'anaemia', 'preterm', 'lbw', 'referral'];
+const MIDWIFE_INDICATORS = ['first_trimester', 'anaemia', 'preterm', 'lbw', 'cesarean', 'referral'];
 
-function buildFacilityRows(summary: RegionSummary): FacilityRow[] {
-  return summary.facilities.map((h) => {
-    const deliveryRows = summary.deliveryRows.filter((d) => d.facility_id === h.facility_id);
-    const delivery = deliveryRows.reduce(addDelivery, emptyDelivery());
-    const meta = deliveryRows[0];
-    const results = new Map(
-      FACILITY_INDICATORS.map((id) => [id, evaluateIndicator(INDICATOR_BY_ID.get(id)!, { health: h, delivery })]),
-    );
-    return {
-      id: h.facility_id,
-      code: h.facility_code,
-      name: meta?.facility_name ?? null,
-      district: h.district,
-      emonc: meta?.emonc_level ?? null,
-      travelMin: meta?.travel_time_to_referral_min ?? null,
-      health: h,
-      deliveriesHere: deliveryRows.filter((d) => d.place_of_delivery === 'FACILITY').reduce((n, d) => n + d.deliveries, 0),
-      results,
-    };
+function buildMidwifeRows(summary: RegionSummary): MidwifeRow[] {
+  return summary.midwives.map((h) => {
+    const code = h.midwife_code;
+    const operations = summary.midwifeRows
+      .filter((m) => m.midwife_id.trim().toLowerCase() === code.trim().toLowerCase())
+      .reduce(addOperations, emptyOperations());
+    const results = new Map(MIDWIFE_INDICATORS.map((id) => [id, evaluateIndicator(INDICATOR_BY_ID.get(id)!, h)]));
+    return { code, health: h, operations, results };
   });
 }
 
 function RateCell({ result }: { result: IndicatorResult | undefined }) {
   if (!result || result.status === 'insufficient') {
     return (
-      <span className="muted" title="Too few records to assess">
+      <span className="muted" title={`Fewer than ${MIN_DENOMINATOR} records`}>
         —
       </span>
     );
@@ -74,7 +59,7 @@ function RateCell({ result }: { result: IndicatorResult | undefined }) {
   );
 }
 
-const rateColumn = (id: string, label: string): Column<FacilityRow> => ({
+const rateColumn = (id: string, label: string): Column<MidwifeRow> => ({
   key: id,
   label,
   numeric: true,
@@ -85,28 +70,9 @@ const rateColumn = (id: string, label: string): Column<FacilityRow> => ({
   render: (r) => <RateCell result={r.results.get(id)} />,
 });
 
-const FACILITY_COLUMNS: Column<FacilityRow>[] = [
-  {
-    key: 'facility',
-    label: 'Facility',
-    sortValue: (r) => r.name ?? r.code,
-    render: (r) => (
-      <div className="facility-cell">
-        <span>{r.name ?? r.code}</span>
-        {r.name && <span className="mono muted">{r.code}</span>}
-      </div>
-    ),
-  },
-  { key: 'district', label: 'District', sortValue: (r) => r.district },
-  { key: 'emonc', label: 'Emergency obstetric care', sortValue: (r) => r.emonc, render: (r) => fmtEmonc(r.emonc) },
-  {
-    key: 'travel',
-    label: 'Travel to referral',
-    numeric: true,
-    sortValue: (r) => r.travelMin,
-    render: (r) => (r.travelMin === null ? '—' : `${fmtInt(r.travelMin)} min`),
-  },
-  { key: 'pregnancies', label: 'Pregnancies', numeric: true, sortValue: (r) => r.health.pregnancies, render: (r) => fmtInt(r.health.pregnancies) },
+const MIDWIFE_COLUMNS: Column<MidwifeRow>[] = [
+  { key: 'code', label: 'Midwife', sortValue: (r) => r.code, render: (r) => <span className="mono">{r.code}</span> },
+  { key: 'women', label: 'Women', numeric: true, sortValue: (r) => r.health.pregnancies, render: (r) => fmtInt(r.health.pregnancies) },
   rateColumn('first_trimester', 'First trimester'),
   {
     key: 'median_ga',
@@ -117,17 +83,66 @@ const FACILITY_COLUMNS: Column<FacilityRow>[] = [
       r.health.median_enrollment_ga_weeks === null ? '—' : `${Number(r.health.median_enrollment_ga_weeks).toFixed(1)} wk`,
   },
   rateColumn('anaemia', 'Anaemia'),
+  { key: 'deliveries', label: 'Deliveries', numeric: true, sortValue: (r) => r.health.deliveries, render: (r) => fmtInt(r.health.deliveries) },
   rateColumn('preterm', 'Preterm'),
   rateColumn('lbw', 'Low birth weight'),
-  { key: 'deliveries_here', label: 'Births at facility', numeric: true, sortValue: (r) => r.deliveriesHere, render: (r) => fmtInt(r.deliveriesHere) },
+  rateColumn('cesarean', 'Caesarean'),
   rateColumn('referral', 'Referred'),
+  {
+    key: 'verified',
+    label: 'Forms verified',
+    numeric: true,
+    sortValue: (r) => ratio(r.operations.documents_verified, r.operations.documents_captured),
+    render: (r) => fmtPct(ratio(r.operations.documents_verified, r.operations.documents_captured), 0),
+  },
 ];
+
+const SOCIO_LABELS: Record<SocioeconomicAttribute, string> = {
+  education_level: 'Education',
+  profession: "Woman's profession",
+  husband_profession: "Husband's profession",
+};
+
+const capitalize = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
+
+/** The most common answers to one question, as shares of everyone who answered it. */
+function ShareList({ answers }: { answers: { value: string; patients: number }[] }) {
+  const total = answers.reduce((n, a) => n + a.patients, 0);
+  if (total === 0) return <p className="muted small">Not recorded.</p>;
+  const top = answers.slice(0, 5);
+  const other = total - top.reduce((n, a) => n + a.patients, 0);
+  const rows = other > 0 ? [...top, { value: 'other answers', patients: other }] : top;
+  return (
+    <ul className="share-list">
+      {rows.map((a) => (
+        <li key={a.value}>
+          <div className="share-top">
+            <span>{capitalize(a.value)}</span>
+            <span className="share-value">{fmtPct(a.patients / total, 0)}</span>
+          </div>
+          <div className="ibar-track">
+            <div className="share-fill" style={{ width: `${(a.patients / total) * 100}%` }} />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function RateWithCount({ n, d }: { n: number; d: number }) {
+  if (d === 0) return <span className="muted">—</span>;
+  return (
+    <span>
+      {fmtPct(n / d)} <span className="muted small">({fmtInt(n)} of {fmtInt(d)})</span>
+    </span>
+  );
+}
 
 export function RegionPage() {
   const { regionName = '' } = useParams();
   const { summaries } = useReadyDashboard();
   const summary = summaries.find((s) => s.region === regionName);
-  const facilityRows = useMemo(() => (summary ? buildFacilityRows(summary) : []), [summary]);
+  const midwifeRows = useMemo(() => (summary ? buildMidwifeRows(summary) : []), [summary]);
 
   if (!summary) {
     return (
@@ -137,15 +152,20 @@ export function RegionPage() {
         </Link>
         <div className="panel">
           <h1>Region not found</h1>
-          <p className="muted">No data is recorded for “{regionName}”. It may have been renamed in dim_facility.</p>
+          <p className="muted">
+            Nothing is recorded for “{regionName}”. It may have been renamed in <code>locations.json</code>.
+          </p>
         </div>
       </div>
     );
   }
 
-  const { assessment: a, health, operations } = summary;
+  const { assessment: a, health: h, operations } = summary;
   const insufficient = a.results.filter((r) => r.status === 'insufficient').length;
   const monthly = summary.monthly.map((m) => ({ ...m }));
+  const meanWeight = ratio(h.birth_weight_sum_g, h.birth_weight_recorded);
+  const meanHead = ratio(h.head_circumference_sum_cm, h.head_circumference_recorded);
+  const smallGroups = h.type_recorded_after_iufd < MIN_DENOMINATOR || h.preterm_recorded_after_iufd < MIN_DENOMINATOR;
 
   return (
     <div className="page">
@@ -155,10 +175,11 @@ export function RegionPage() {
 
       <header className="region-header">
         <div>
-          <p className="eyebrow">{summary.geo?.country_name ?? 'Region'}</p>
+          <p className="eyebrow">{summary.geo?.country_name ?? 'Not on the map yet'}</p>
           <h1>{summary.region}</h1>
           <p className="muted">
-            {fmtInt(summary.facilities.length)} facilities · {fmtInt(summary.midwifeCount)} midwives reporting
+            {fmtInt(summary.midwives.length)} {summary.midwives.length === 1 ? 'midwife' : 'midwives'} ·{' '}
+            {fmtInt(h.pregnancies)} women registered
           </p>
         </div>
         <ConcernBadge level={a.level} size="lg" />
@@ -177,74 +198,138 @@ export function RegionPage() {
         )}
         {insufficient > 0 && (
           <p className="note">
-            {insufficient} indicator{insufficient > 1 ? 's have' : ' has'} fewer than 30 records and{' '}
+            {insufficient} indicator{insufficient > 1 ? 's have' : ' has'} fewer than {MIN_DENOMINATOR} records and{' '}
             {insufficient > 1 ? 'are' : 'is'} not assessed.
           </p>
         )}
       </section>
 
       <div className="kpi-row">
-        <StatTile label="Pregnancies registered" value={fmtInt(health.pregnancies)} />
-        <StatTile label="Deliveries recorded" value={fmtInt(health.deliveries)} />
-        <StatTile label="Live births" value={fmtInt(health.live_births)} />
-        <StatTile label="Stillbirths" value={fmtInt(health.stillbirths)} />
+        <StatTile label="Women registered" value={fmtInt(h.pregnancies)} />
+        <StatTile label="Deliveries recorded" value={fmtInt(h.deliveries)} />
         <StatTile
-          label="Records verified by midwife"
-          value={fmtPct(ratio(operations.documents_verified, operations.documents_captured), 0)}
-          note={`${fmtInt(operations.documents_captured)} documents captured`}
+          label="Average birth weight"
+          value={meanWeight === null ? '—' : `${fmtInt(meanWeight)} g`}
+          note={`${fmtInt(h.birth_weight_recorded)} babies weighed`}
         />
-        <StatTile label="Documents waiting" value={fmtInt(operations.documents_open)} note={`${fmtInt(operations.sync_failures)} sync failures`} />
+        <StatTile
+          label="Average head circumference"
+          value={meanHead === null ? '—' : `${meanHead.toFixed(1)} cm`}
+          note={`${fmtInt(h.head_circumference_recorded)} babies measured`}
+        />
+        <StatTile
+          label="Forms verified by midwife"
+          value={fmtPct(ratio(operations.documents_verified, operations.documents_captured), 0)}
+          note={`${fmtInt(operations.documents_captured)} forms captured`}
+        />
+        <StatTile
+          label="Forms waiting"
+          value={fmtInt(operations.documents_waiting)}
+          note={`${fmtInt(operations.documents_sync_failed)} failed to sync`}
+        />
       </div>
 
       <section aria-labelledby="indicators-title" className="stack">
         <h2 id="indicators-title">Indicators</h2>
         <div className="domain-grid">
-          {DOMAINS.map((domain) => {
-            const results = a.results.filter((r) => r.def.domain === domain);
-            return (
-              <div className="panel" key={domain}>
-                <h3 className="eyebrow">{domain}</h3>
-                <ul className="indicator-list">
-                  {results.map((r) => (
+          {DOMAINS.map((domain) => (
+            <div className="panel" key={domain}>
+              <h3 className="eyebrow">{domain}</h3>
+              <ul className="indicator-list">
+                {a.results
+                  .filter((r) => r.def.domain === domain)
+                  .map((r) => (
                     <li key={r.def.id}>
                       <IndicatorBar result={r} scaleMax={scaleMaxFor([r])} showCounts />
                       <StatusChip status={r.status} />
                     </li>
                   ))}
-                </ul>
-              </div>
-            );
-          })}
+              </ul>
+            </div>
+          ))}
         </div>
       </section>
 
+      <div className="chart-grid">
+        <section className="panel" aria-labelledby="history-title">
+          <h2 id="history-title">Previous stillbirth and this delivery</h2>
+          <p className="muted">Women who lost an earlier pregnancy in the womb, compared with everyone else.</p>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th className="th-plain">Women with</th>
+                  <th className="th-plain num">Caesarean</th>
+                  <th className="th-plain num">Preterm</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>A previous stillbirth</td>
+                  <td className="num">
+                    <RateWithCount n={h.cesareans_after_iufd} d={h.type_recorded_after_iufd} />
+                  </td>
+                  <td className="num">
+                    <RateWithCount n={h.preterm_after_iufd} d={h.preterm_recorded_after_iufd} />
+                  </td>
+                </tr>
+                <tr>
+                  <td>No previous stillbirth</td>
+                  <td className="num">
+                    <RateWithCount n={h.cesareans_no_iufd} d={h.type_recorded_no_iufd} />
+                  </td>
+                  <td className="num">
+                    <RateWithCount n={h.preterm_no_iufd} d={h.preterm_recorded_no_iufd} />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {smallGroups && (
+            <p className="note">Fewer than {MIN_DENOMINATOR} women had a previous stillbirth, so treat these rates with care.</p>
+          )}
+        </section>
+
+        <section className="panel" aria-labelledby="socio-title">
+          <h2 id="socio-title">Socioeconomic profile</h2>
+          <p className="muted">Answers as written on the forms, most common first.</p>
+          <div className="socio-grid">
+            {(Object.keys(SOCIO_LABELS) as SocioeconomicAttribute[]).map((attr) => (
+              <div key={attr}>
+                <h3 className="eyebrow">{SOCIO_LABELS[attr]}</h3>
+                <ShareList answers={summary.socioeconomic[attr]} />
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
       {monthly.length > 0 && (
         <section className="panel" aria-labelledby="activity-title">
-          <h2 id="activity-title">Monthly activity</h2>
-          <p className="muted">Pregnancies enrolled and deliveries recorded by the region's midwives.</p>
+          <h2 id="activity-title">Women registered per month</h2>
+          <p className="muted">Counted from the month of each woman's first captured form.</p>
           <TrendChart
+            kind="bar"
             data={monthly}
             xKey="month"
             xFormat={fmtMonth}
-            series={[
-              { key: 'pregnancies_enrolled', label: 'Pregnancies enrolled', color: 'var(--series-1)' },
-              { key: 'deliveries_recorded', label: 'Deliveries recorded', color: 'var(--series-2)' },
-            ]}
+            series={[{ key: 'patients_registered', label: 'Women registered', color: 'var(--series-1)' }]}
           />
         </section>
       )}
 
-      <section className="panel" aria-labelledby="facilities-title">
-        <h2 id="facilities-title">Facilities</h2>
+      <section className="panel" aria-labelledby="midwives-title">
+        <h2 id="midwives-title">Midwives</h2>
         <p className="muted">
-          Rates are flagged with the same rules as the region. Facilities with fewer than 30 records show a dash.
+          Rates use the same flag rules as the region. A dash means fewer than {MIN_DENOMINATOR} records.
         </p>
         <DataTable
-          rows={facilityRows}
-          columns={FACILITY_COLUMNS}
-          rowKey={(r) => r.id}
-          initialSort={{ key: 'pregnancies', dir: 'desc' }}
-          caption={`Facilities in ${summary.region}`}
+          rows={midwifeRows}
+          columns={MIDWIFE_COLUMNS}
+          rowKey={(r) => r.code}
+          initialSort={{ key: 'women', dir: 'desc' }}
+          caption={`Midwives in ${summary.region}`}
+          limit={20}
         />
       </section>
     </div>

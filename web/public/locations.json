@@ -1,0 +1,12 @@
+{
+  "about": "Groups midwives into regions and places each region on the map. List every midwife code used in patient_identification.midwife_code, and every midwife_id used in document_submissions if those differ. Codes are matched without regard to case. Midwives not listed here appear as their own area, off the map.",
+  "regions": [
+    {
+      "region": "Example region (replace me)",
+      "country": "Country name",
+      "latitude": 0,
+      "longitude": 0,
+      "midwives": ["example_midwife_code"]
+    }
+  ]
+}
