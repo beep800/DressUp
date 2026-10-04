@@ -16,13 +16,45 @@ export const DATA_MODE: 'n8n' | 'demo' = DATA_URL ? 'n8n' : 'demo';
 
 const PAYLOAD_KEYS = ['areas', 'midwifeHealth', 'socioeconomic', 'midwifeMonths', 'documentDays'] as const;
 
+// The hosted version (api/dashboard.js) can require a site password. It is kept for
+// this browser tab only and sent with each request.
+const PASSWORD_KEY = 'maternal-health-atlas-password';
+
+export function savePassword(password: string) {
+  try {
+    sessionStorage.setItem(PASSWORD_KEY, password);
+  } catch {
+    // Storage can be blocked; the password is then asked for again on reload.
+  }
+}
+
+function savedPassword(): string | null {
+  try {
+    return sessionStorage.getItem(PASSWORD_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** The server asked for the site password, or rejected the one saved. */
+export class PasswordRequiredError extends Error {
+  constructor(readonly rejected: boolean) {
+    super(rejected ? 'That password was not accepted.' : 'This dashboard is password protected.');
+  }
+}
+
 async function fetchJson(url: string, what: string): Promise<unknown> {
+  const password = savedPassword();
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (password) headers['X-Site-Password'] = password;
+
   let response: Response;
   try {
-    response = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    response = await fetch(url, { headers, cache: 'no-store' });
   } catch {
     throw new Error(`Could not reach ${what} at ${url}.`);
   }
+  if (response.status === 401) throw new PasswordRequiredError(password !== null);
   if (!response.ok) throw new Error(`${what} at ${url} answered ${response.status} ${response.statusText}.`);
   try {
     return await response.json();
