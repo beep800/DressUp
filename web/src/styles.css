@@ -411,6 +411,44 @@ div.note {
   max-width: 560px;
 }
 
+/* ---------- Password gate ---------- */
+
+.gate {
+  width: min(400px, 100%);
+  gap: 16px;
+  padding: 28px;
+  box-shadow: var(--shadow);
+}
+
+.gate h1 {
+  margin-top: 4px;
+}
+
+.gate label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+.gate input {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  font-weight: 400;
+}
+
+.form-error {
+  color: var(--ink);
+  font-size: 0.8125rem;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--critical) 14%, var(--surface));
+}
+
 /* ---------- Badges ---------- */
 
 .tone-critical {

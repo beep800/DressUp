@@ -34,6 +34,31 @@ To use your data, follow `../n8n/README.md`: import the workflow into n8n and se
 `npm run build` writes a static site to `dist/`, and `npm run preview` serves it on
 http://localhost:4173 with the same n8n proxy.
 
+## Put it online (Vercel)
+
+The dashboard can be hosted on Vercel's free plan so others can open it from a link.
+`api/dashboard.js` runs on Vercel's server: it adds the n8n key to each request, so the
+key never reaches the browser, and asks for a password when `SITE_PASSWORD` is set.
+
+1. Sign in at https://vercel.com with your GitHub account.
+2. **Add New → Project**, then **Import** the `DressUp` repository.
+3. Set **Root Directory** to `web`. Vercel detects Vite and fills in the rest.
+4. Open **Environment Variables** and add:
+
+   | Name | Value |
+   |---|---|
+   | `VITE_DATA_URL` | `/api/dashboard` |
+   | `N8N_URL` | your n8n address, e.g. `https://yourname.app.n8n.cloud` |
+   | `N8N_KEY` | the Value of the workflow's `Dashboard key` credential |
+   | `SITE_PASSWORD` | a password to share with your viewers (leave out to make the page public) |
+
+5. Click **Deploy**. When it finishes, Vercel shows the page's address, ending in
+   `.vercel.app`.
+
+Each push to `main` redeploys the site. After changing an environment variable, open
+**Deployments**, click **⋯** on the latest one and choose **Redeploy**. The n8n
+workflow must stay active, and your n8n plan running, for the hosted page to load data.
+
 ## Where the numbers come from
 
 The n8n workflow places each woman's address in a town

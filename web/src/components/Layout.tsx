@@ -1,9 +1,45 @@
-import type { ReactNode } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useDashboard } from '../data/DataContext';
 
+function PasswordGate({ rejected, onSubmit }: { rejected: boolean; onSubmit: (password: string) => void }) {
+  const [password, setPassword] = useState('');
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (password) onSubmit(password);
+  };
+  return (
+    <form className="panel gate" onSubmit={submit}>
+      <div>
+        <p className="eyebrow">Midwife census</p>
+        <h1>Maternal Health Atlas</h1>
+      </div>
+      <p className="muted">This dashboard shows patient health data. Enter the password you were given to open it.</p>
+      <label htmlFor="site-password">
+        Password
+        <input
+          id="site-password"
+          type="password"
+          autoComplete="current-password"
+          autoFocus
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+      </label>
+      {rejected && (
+        <p className="form-error" role="alert">
+          That password didn't work. Check it with the person who shared this page.
+        </p>
+      )}
+      <button className="btn btn-primary" type="submit">
+        Open dashboard
+      </button>
+    </form>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
-  const { status, error, data, reload } = useDashboard();
+  const { status, error, data, reload, unlock, passwordRejected } = useDashboard();
 
   return (
     <div className="app">
@@ -36,6 +72,11 @@ export function Layout({ children }: { children: ReactNode }) {
         {status === 'loading' && (
           <div className="center-screen">
             <p className="muted">Loading census data…</p>
+          </div>
+        )}
+        {status === 'locked' && (
+          <div className="center-screen">
+            <PasswordGate rejected={passwordRejected} onSubmit={unlock} />
           </div>
         )}
         {status === 'error' && (
